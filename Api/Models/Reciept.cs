@@ -13,7 +13,7 @@ public class Receipt {
     public decimal? Total { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public ReceiptStatus Status { get; set; } = ReceiptStatus.PendingParse;
+    public string? ParseError { get; set; } // Added this property
 
     public List<ReceiptItem> Items { get; set; } = [];
-    
 }

@@ -41,6 +41,9 @@ namespace Api.Migrations
                     b.Property<string>("OwnerUserId")
                         .HasColumnType("text");
 
+                    b.Property<string>("ParseError")
+                        .HasColumnType("text");
+
                     b.Property<string>("RawText")
                         .IsRequired()
                         .HasMaxLength(100000)

@@ -3,7 +3,8 @@ namespace Api.Enums;
 public enum ReceiptStatus
 {
     PendingParse = 0,
-    Parsed = 1,
-    FailedParse = 2,
+    Parsing = 1,
+    Parsed = 2,
+    FailedParse = 3,
     Deleted = 9
 }

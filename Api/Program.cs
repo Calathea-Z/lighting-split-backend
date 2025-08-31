@@ -2,6 +2,10 @@ using Api.Data;
 using Api.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
+using Azure.Storage.Blobs;
+using Azure.Storage.Queues;
+using Api.Services;
+using Api.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,7 +37,27 @@ builder.Services.Configure<UploadOptions>(opts =>
     opts.MaxBytes = 10 * 1024 * 1024;
 });
 
+var cfg = builder.Configuration;
+
+// Handle Azure Storage connection string safely
+var connectionString = cfg["AzureStorage:ConnectionString"];
+if (!string.IsNullOrEmpty(connectionString))
+{
+    builder.Services.AddSingleton(new BlobServiceClient(connectionString));
+    builder.Services.AddSingleton(new QueueServiceClient(connectionString));
+    builder.Services.AddSingleton<IParseQueue, AzureStorageParseQueue>();
+}
+else
+{
+    // Use development storage if no connection string is provided
+    var devConnectionString = "UseDevelopmentStorage=true";
+    builder.Services.AddSingleton(new BlobServiceClient(devConnectionString));
+    builder.Services.AddSingleton(new QueueServiceClient(devConnectionString));
+    builder.Services.AddSingleton<IParseQueue, AzureStorageParseQueue>();
+}
+
 builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
+builder.Services.AddScoped<IReceiptService, ReceiptService>();
 
 var app = builder.Build();
 
