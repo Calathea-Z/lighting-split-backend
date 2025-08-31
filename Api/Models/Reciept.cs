@@ -1,3 +1,5 @@
+using Api.Enums;
+
 namespace Api.Models;
 
 public class Receipt {
@@ -9,7 +11,8 @@ public class Receipt {
     public decimal? Tax { get; set; }
     public decimal? Tip { get; set; }
     public decimal? Total { get; set; }
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public ReceiptStatus Status { get; set; } = ReceiptStatus.PendingParse;
 
     public List<ReceiptItem> Items { get; set; } = [];
     

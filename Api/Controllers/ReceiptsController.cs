@@ -1,16 +1,61 @@
 using Api.Dtos;
 using Api.Data;
 using Api.Mapping;
-using Api.Models;
+using Api.Models;          // <- contains Receipt + ReceiptStatus
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Api.Storage;
+using Api.Enums;
 
 namespace Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class ReceiptsController(LightningDbContext db) : ControllerBase
+public class ReceiptsController(LightningDbContext db, IFileStorage fileStorage) : ControllerBase
 {
+    // POST /api/receipts/upload
+    [HttpPost("upload")]
+    [RequestSizeLimit(20_000_000)] // 20 MB
+    [Consumes("multipart/form-data")]
+    [ProducesResponseType(typeof(ReceiptSummaryDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ReceiptSummaryDto>> Upload([FromForm] UploadReceiptRequestDto form, CancellationToken ct)
+    {
+        var file = form.File;
+        if (file is null || file.Length == 0) return BadRequest("File is required.");
+
+        StoredFile stored;
+        try
+        {
+            stored = await fileStorage.SaveAsync(file, ct: ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // from storage guardrails: size, type, etc.
+            return BadRequest(ex.Message);
+        }
+
+        var receipt = new Receipt
+        {
+            Id = Guid.NewGuid(),
+            CreatedAt = DateTimeOffset.UtcNow,
+            OwnerUserId = null, // anonymous for now
+            Status = ReceiptStatus.PendingParse,
+            OriginalFileUrl = stored.Url,
+            SubTotal = 0m,
+            Tax = 0m,
+            Tip = 0m,
+            Total = 0m,
+            Items = []
+        };
+
+        db.Receipts.Add(receipt);
+        await db.SaveChangesAsync(ct);
+
+        var dto = receipt.ToSummaryDto();
+        return CreatedAtAction(nameof(GetById), new { id = receipt.Id }, dto);
+    }
+
     // POST /api/receipts
     [HttpPost]
     public async Task<ActionResult<ReceiptSummaryDto>> Create([FromBody] CreateReceiptDto dto)
@@ -80,7 +125,6 @@ public class ReceiptsController(LightningDbContext db) : ControllerBase
     }
 
     // PATCH /api/receipts/{id}/totals  (optional: allow parser to update money fields)
-
     [HttpPatch("{id:guid}/totals")]
     public async Task<ActionResult<ReceiptSummaryDto>> UpdateTotals(Guid id, [FromBody] UpdateTotalsDto dto)
     {

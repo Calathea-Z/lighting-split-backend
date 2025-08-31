@@ -1,5 +1,7 @@
 using Api.Data;
+using Api.Storage;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,7 +26,25 @@ builder.Services.AddCors(opt =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+builder.Services.Configure<UploadOptions>(opts =>
+{
+    opts.RootFolder = "uploads";
+    opts.PublicRequestPath = "/uploads";
+    opts.MaxBytes = 10 * 1024 * 1024;
+});
+
+builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
+
 var app = builder.Build();
+
+// Serve /uploads from ContentRoot/uploads
+var uploadsAbs = Path.Combine(app.Environment.ContentRootPath, "uploads");
+Directory.CreateDirectory(uploadsAbs);
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(uploadsAbs),
+    RequestPath = "/uploads"
+});
 
 // Enable Swagger UI
 app.UseSwagger();

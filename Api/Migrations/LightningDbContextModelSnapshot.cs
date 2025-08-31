@@ -28,8 +28,10 @@ namespace Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamptz")
+                        .HasDefaultValueSql("now()");
 
                     b.Property<string>("OriginalFileUrl")
                         .IsRequired()
@@ -43,6 +45,11 @@ namespace Api.Migrations
                         .IsRequired()
                         .HasMaxLength(100000)
                         .HasColumnType("character varying(100000)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<decimal?>("SubTotal")
                         .HasColumnType("numeric(12,2)");
@@ -61,6 +68,8 @@ namespace Api.Migrations
                     b.HasIndex("CreatedAt");
 
                     b.HasIndex("OwnerUserId");
+
+                    b.HasIndex("Status");
 
                     b.ToTable("Receipts");
                 });

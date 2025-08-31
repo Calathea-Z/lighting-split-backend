@@ -4,7 +4,7 @@ public record ReceiptSummaryDto(
     Guid Id,
     string? OwnerUserId,
     string OriginalFileUrl,
-    DateTime CreatedAt,
+    DateTimeOffset CreatedAt,
     decimal? SubTotal,
     decimal? Tax,
     decimal? Tip,

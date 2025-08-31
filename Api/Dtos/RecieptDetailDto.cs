@@ -5,7 +5,7 @@ public record ReceiptDetailDto(
     string? OwnerUserId,
     string OriginalFileUrl,
     string RawText,
-    DateTime CreatedAt,
+    DateTimeOffset CreatedAt,
     decimal? SubTotal,
     decimal? Tax,
     decimal? Tip,

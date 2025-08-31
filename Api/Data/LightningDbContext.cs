@@ -23,6 +23,9 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             e.HasIndex(x => x.CreatedAt);
             e.HasIndex(x => x.OwnerUserId);
 
+            // Index on status for quick dashboards/filters
+            e.HasIndex(x => x.Status);
+
             // Column sizes
             e.Property(x => x.OriginalFileUrl).HasMaxLength(500);
             e.Property(x => x.RawText).HasMaxLength(100_000);
@@ -32,6 +35,18 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             e.Property(x => x.Tax).HasColumnType("numeric(12,2)");
             e.Property(x => x.Tip).HasColumnType("numeric(12,2)");
             e.Property(x => x.Total).HasColumnType("numeric(12,2)");
+
+            // Store ReceiptStatus as string (readable, reorder-safe)
+            e.Property(x => x.Status)
+             .HasConversion<string>()
+             .HasMaxLength(32)
+             .IsRequired();
+
+            // (works great with DateTimeOffset on the model)
+            e.Property(x => x.CreatedAt)
+             .HasColumnType("timestamptz")
+             .HasDefaultValueSql("now()")
+             .IsRequired();
         });
 
         b.Entity<ReceiptItem>(e =>
