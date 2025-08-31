@@ -1,3 +1,3 @@
 namespace Api.Contracts;
 
-public record ReceiptParseMessage(Guid ReceiptId, string BlobName);
+public record ReceiptParseMessage(string Container, string Blob, string? ReceiptId);

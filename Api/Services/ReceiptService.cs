@@ -89,7 +89,6 @@ public sealed class ReceiptService(
         return entity.ToSummaryDto();
     }
 
-    // === Upload flow moved here earlier ===
     public async Task<ReceiptSummaryDto> UploadAsync(IFormFile file, CancellationToken ct = default)
     {
         if (file is null || file.Length == 0) throw new ArgumentException("File is required.", nameof(file));
@@ -118,14 +117,18 @@ public sealed class ReceiptService(
         var ext = Path.GetExtension(file.FileName);
         var blobName = $"{receipt.Id}/{Path.GetRandomFileName()}{ext}";
         var blob = container.GetBlobClient(blobName);
-        await blob.UploadAsync(file.OpenReadStream(), overwrite: true, cancellationToken: ct);
+
+        // set content type
+        var headers = new Azure.Storage.Blobs.Models.BlobHttpHeaders { ContentType = file.ContentType ?? "application/octet-stream" };
+        await using var s = file.OpenReadStream();
+        await blob.UploadAsync(s, httpHeaders: headers, cancellationToken: ct);
 
         // persist URL
         receipt.OriginalFileUrl = blob.Uri.ToString();
         await db.SaveChangesAsync(ct);
 
         // enqueue parse job
-        await parseQueue.EnqueueAsync(new(receipt.Id, blobName), ct);
+        await parseQueue.EnqueueAsync(new(container.Name, blobName, receipt.Id.ToString()), ct);
 
         return receipt.ToSummaryDto();
     }
