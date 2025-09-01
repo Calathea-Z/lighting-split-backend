@@ -93,17 +93,59 @@ public sealed class ReceiptsController(IReceiptService receipts) : ControllerBas
         }
     }
 
-    // Optional: endpoint for the Function to report parse failures (recommended)
+    // Api/Controllers/ReceiptsController.cs (add this action)
     [HttpPost("{id:guid}/parse-error")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> MarkParseFailed(Guid id, [FromBody] string error, CancellationToken ct = default)
     {
-        var r = await receipts.GetByIdAsync(id, ct);
-        if (r is null) return NotFound();
+        var ok = await receipts.MarkParseFailedAsync(id, error, ct);
+        return ok ? Ok() : NotFound();
+    }
 
-        // If you have a service method for this, use it; otherwise quick inline:
-        // (You can move this into ReceiptService later.)
-        return Ok();
+    // POST /api/receipts/{receiptId}/items
+    [HttpPost("{receiptId:guid}/items")]
+    [ProducesResponseType(typeof(ReceiptItemDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ReceiptItemDto>> AddItem(Guid receiptId, [FromBody] CreateReceiptItemDto dto, CancellationToken ct = default)
+    {
+        var item = await receipts.AddItemAsync(receiptId, dto, ct);
+        return item is null ? NotFound() : CreatedAtAction(nameof(GetById), new { id = receiptId }, item);
+    }
+
+    // PATCH /api/receipts/{receiptId}/items/{itemId}
+    [HttpPatch("{receiptId:guid}/items/{itemId:guid}")]
+    [ProducesResponseType(typeof(ReceiptItemDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(string), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<ReceiptItemDto>> UpdateItem(Guid receiptId, Guid itemId, [FromBody] UpdateReceiptItemDto dto, CancellationToken ct = default)
+    {
+        try
+        {
+            var item = await receipts.UpdateItemAsync(receiptId, itemId, dto, ct);
+            return item is null ? NotFound() : Ok(item);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("Concurrency"))
+        {
+            return Conflict(ex.Message); // 409
+        }
+    }
+
+    // DELETE /api/receipts/{receiptId}/items/{itemId}?version=123
+    [HttpDelete("{receiptId:guid}/items/{itemId:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(string), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> DeleteItem(Guid receiptId, Guid itemId, [FromQuery] uint? version, CancellationToken ct = default)
+    {
+        try
+        {
+            var ok = await receipts.DeleteItemAsync(receiptId, itemId, version, ct);
+            return ok ? NoContent() : NotFound();
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("Concurrency"))
+        {
+            return Conflict(ex.Message);
+        }
     }
 }
