@@ -12,7 +12,7 @@ public sealed class ReceiptsController(IReceiptService receipts) : ControllerBas
     [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<ReceiptSummaryDto>> Create(
         [FromBody] CreateReceiptDto dto,
-        CancellationToken ct)
+        CancellationToken ct = default)
     {
         try
         {
@@ -29,7 +29,7 @@ public sealed class ReceiptsController(IReceiptService receipts) : ControllerBas
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(ReceiptDetailDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<ReceiptDetailDto>> GetById(Guid id, CancellationToken ct)
+    public async Task<ActionResult<ReceiptDetailDto>> GetById(Guid id, CancellationToken ct = default)
     {
         var result = await receipts.GetByIdAsync(id, ct);
         return result is null ? NotFound() : Ok(result);
@@ -52,7 +52,7 @@ public sealed class ReceiptsController(IReceiptService receipts) : ControllerBas
     [HttpDelete("{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct = default)
     {
         var ok = await receipts.DeleteAsync(id, ct);
         return ok ? NoContent() : NotFound();
@@ -66,26 +66,25 @@ public sealed class ReceiptsController(IReceiptService receipts) : ControllerBas
     public async Task<ActionResult<ReceiptSummaryDto>> UpdateTotals(
         Guid id,
         [FromBody] UpdateTotalsDto dto,
-        CancellationToken ct)
+        CancellationToken ct = default)
     {
         var result = await receipts.UpdateTotalsAsync(id, dto, ct);
         return result is null ? NotFound() : Ok(result);
     }
 
     // POST /api/receipts/upload
-    // File upload -> blob -> enqueue parse job
     [HttpPost("upload")]
     [RequestSizeLimit(20_000_000)]               // 20 MB
     [Consumes("multipart/form-data")]
     [ProducesResponseType(typeof(ReceiptSummaryDto), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<ReceiptSummaryDto>> Upload(
-        [FromForm] UploadReceiptRequestDto form,
-        CancellationToken ct)
+        [FromForm] UploadReceiptItemDto form,
+        CancellationToken ct = default)
     {
         try
         {
-            var dto = await receipts.UploadAsync(form.File, ct);
+            var dto = await receipts.UploadAsync(form, ct);
             return CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto);
         }
         catch (ArgumentException ex)
@@ -93,4 +92,18 @@ public sealed class ReceiptsController(IReceiptService receipts) : ControllerBas
             return BadRequest(ex.Message);
         }
     }
-}   
+
+    // Optional: endpoint for the Function to report parse failures (recommended)
+    [HttpPost("{id:guid}/parse-error")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MarkParseFailed(Guid id, [FromBody] string error, CancellationToken ct = default)
+    {
+        var r = await receipts.GetByIdAsync(id, ct);
+        if (r is null) return NotFound();
+
+        // If you have a service method for this, use it; otherwise quick inline:
+        // (You can move this into ReceiptService later.)
+        return Ok();
+    }
+}

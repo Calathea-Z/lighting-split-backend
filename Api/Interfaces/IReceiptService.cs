@@ -1,6 +1,5 @@
 using Api.Dtos;
-
-namespace Api.Interfaces;
+using Microsoft.AspNetCore.Http;
 
 public interface IReceiptService
 {
@@ -9,5 +8,7 @@ public interface IReceiptService
     Task<IReadOnlyList<ReceiptSummaryDto>> ListAsync(string? ownerUserId, int skip, int take, CancellationToken ct = default);
     Task<bool> DeleteAsync(Guid id, CancellationToken ct = default);
     Task<ReceiptSummaryDto?> UpdateTotalsAsync(Guid id, UpdateTotalsDto dto, CancellationToken ct = default);
-    Task<ReceiptSummaryDto> UploadAsync(IFormFile file, CancellationToken ct = default);
+
+    // Updated: accept the whole upload DTO (so we can capture metadata)
+    Task<ReceiptSummaryDto> UploadAsync(UploadReceiptItemDto dto, CancellationToken ct = default);
 }

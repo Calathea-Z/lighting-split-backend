@@ -1,8 +1,9 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Api.Dtos;
 
-public record CreateReceiptDto(
-    string? OwnerUserId,
-    string? OriginalFileUrl,
-    string? RawText,
-    List<CreateReceiptItemDto> Items
-);
+public sealed class CreateReceiptDto
+{
+    [Required]
+    public List<CreateReceiptItemDto> Items { get; set; } = [];
+}

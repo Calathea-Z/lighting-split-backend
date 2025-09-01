@@ -1,9 +1,8 @@
 // Api/Services/ReceiptService.cs
 using Api.Data;
 using Api.Dtos;
-using Api.Enums;
 using Api.Interfaces;
-using Api.Mapping;
+using Api.Mappers;
 using Api.Models;
 using Azure.Storage.Blobs;
 using Microsoft.EntityFrameworkCore;
@@ -14,6 +13,9 @@ public sealed class ReceiptService(
     IParseQueue parseQueue
 ) : IReceiptService
 {
+    // ---------------------------
+    // Create from DTO (server-side math + sane defaults)
+    // ---------------------------
     public async Task<ReceiptSummaryDto> CreateAsync(CreateReceiptDto dto, CancellationToken ct = default)
     {
         if (dto is null) throw new ArgumentException("Body is required.", nameof(dto));
@@ -22,10 +24,31 @@ public sealed class ReceiptService(
         if (dto.Items.Any(i => i.Qty <= 0 || i.UnitPrice < 0))
             throw new ArgumentException("Item quantities must be > 0 and prices must be >= 0.", nameof(dto.Items));
 
-        var entity = dto.ToEntity();
+        // If you already have dto.ToEntity(), keep it; then normalize:
+        var entity = dto.ToEntity(); // assumes you map CreateReceiptItemDto -> ReceiptItem etc.
         entity.Id = entity.Id == Guid.Empty ? Guid.NewGuid() : entity.Id;
         entity.CreatedAt = entity.CreatedAt == default ? DateTimeOffset.UtcNow : entity.CreatedAt;
-        entity.Status = entity.Status == 0 ? ReceiptStatus.Parsed : entity.Status; // or PendingParse if you prefer
+        entity.UpdatedAt = DateTimeOffset.UtcNow;
+        entity.Status = string.IsNullOrWhiteSpace(entity.Status) ? "Parsed" : entity.Status;
+
+        // Recalculate all line items (line math & timestamps)
+        foreach (var i in entity.Items)
+        {
+            ReceiptMappers.Recalculate(i);
+            i.CreatedAt = i.CreatedAt == default ? DateTimeOffset.UtcNow : i.CreatedAt;
+            i.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        // If totals were omitted, roll up from items
+        if (entity.SubTotal is null || entity.Total is null)
+        {
+            var sub = entity.Items.Sum(x => x.LineSubtotal);
+            var tax = entity.Items.Sum(x => x.Tax ?? 0m);
+            var tot = entity.Items.Sum(x => x.LineTotal);
+            entity.SubTotal ??= (sub == 0m ? null : sub);
+            entity.Tax      ??= (tax == 0m ? null : tax);
+            entity.Total    ??= (tot == 0m ? null : tot);
+        }
 
         db.Receipts.Add(entity);
         await db.SaveChangesAsync(ct);
@@ -33,103 +56,178 @@ public sealed class ReceiptService(
         return entity.ToSummaryDto();
     }
 
+    // ---------------------------
+    // Read (detail)
+    // ---------------------------
     public async Task<ReceiptDetailDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
     {
-        var receipt = await db.Receipts
-            .Include(r => r.Items)
-            .FirstOrDefaultAsync(r => r.Id == id, ct);
+        var r = await db.Receipts
+            .Include(x => x.Items)
+            .FirstOrDefaultAsync(x => x.Id == id, ct);
 
-        return receipt?.ToDetailDto();
+        return r?.ToDetailDto();
     }
 
-    public async Task<IReadOnlyList<ReceiptSummaryDto>> ListAsync(string? ownerUserId, int skip, int take, CancellationToken ct = default)
-    {
-        take = Math.Clamp(take, 1, 200);
+    // ---------------------------
+    // List (summary projection; no Include needed)
+    // ---------------------------
+public async Task<IReadOnlyList<ReceiptSummaryDto>> ListAsync(string? ownerUserId, int skip, int take, CancellationToken ct = default)
+{
+    take = Math.Clamp(take, 1, 200);
 
-        IQueryable<Receipt> query = db.Receipts.AsNoTracking().Include(r => r.Items)
-            .OrderByDescending(r => r.CreatedAt);
+    var q = db.Receipts.AsNoTracking();
 
-        if (!string.IsNullOrWhiteSpace(ownerUserId))
-            query = query.Where(r => r.OwnerUserId == ownerUserId)
-                         .OrderByDescending(r => r.CreatedAt);
+    if (!string.IsNullOrWhiteSpace(ownerUserId))
+        q = q.Where(r => r.OwnerUserId == ownerUserId);
 
-        return await query.Skip(skip).Take(take)
-            .Select(r => r.ToSummaryDto())
-            .ToListAsync(ct);
-    }
+    return await q
+        .OrderByDescending(r => r.CreatedAt)
+        .Select(r => new ReceiptSummaryDto(
+            r.Id,
+            r.Status,
+            r.SubTotal,
+            r.Tax,
+            r.Tip,
+            r.Total,
+            r.CreatedAt,
+            r.UpdatedAt,
+            r.Items.Count
+        ))
+        .Skip(skip)
+        .Take(take)
+        .ToListAsync(ct);
+}
 
+
+    // ---------------------------
+    // Delete (best-effort blob cleanup)
+    // ---------------------------
     public async Task<bool> DeleteAsync(Guid id, CancellationToken ct = default)
     {
-        var entity = await db.Receipts.FindAsync([id], ct);
-        if (entity is null) return false;
+        var r = await db.Receipts.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (r is null) return false;
 
-        db.Receipts.Remove(entity);
+        db.Receipts.Remove(r);
         await db.SaveChangesAsync(ct);
+
+        // Try to delete blob if we know where it is (ignore failures)
+        if (!string.IsNullOrWhiteSpace(r.BlobContainer) && !string.IsNullOrWhiteSpace(r.BlobName))
+        {
+            try
+            {
+                var container = blobSvc.GetBlobContainerClient(r.BlobContainer);
+                var blob = container.GetBlobClient(r.BlobName);
+                await blob.DeleteIfExistsAsync(cancellationToken: ct);
+            }
+            catch { /* swallow */ }
+        }
+
         return true;
     }
 
+    // ---------------------------
+    // Update totals (idempotent; uses line rollups as fallback)
+    // ---------------------------
     public async Task<ReceiptSummaryDto?> UpdateTotalsAsync(Guid id, UpdateTotalsDto dto, CancellationToken ct = default)
     {
-        var entity = await db.Receipts.Include(r => r.Items).FirstOrDefaultAsync(r => r.Id == id, ct);
-        if (entity is null) return null;
+        var r = await db.Receipts.Include(x => x.Items).FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (r is null) return null;
 
-        // compute fallback subtotal if not provided
-        var computedSub = entity.Items.Sum(i => i.UnitPrice * i.Qty);
+        // Use persisted line math when available
+        var lineSub = r.Items.Sum(i => i.LineSubtotal);
+        var lineTax = r.Items.Sum(i => i.Tax ?? 0m);
+        var lineTot = r.Items.Sum(i => i.LineTotal);
 
-        entity.SubTotal = dto.SubTotal ?? entity.SubTotal ?? computedSub;
-        entity.Tax = dto.Tax ?? entity.Tax;
-        entity.Tip = dto.Tip ?? entity.Tip;
+        r.SubTotal = dto.SubTotal ?? r.SubTotal ?? (lineSub == 0m ? null : lineSub);
+        r.Tax      = dto.Tax      ?? r.Tax      ?? (lineTax == 0m ? null : lineTax);
+        r.Tip      = dto.Tip      ?? r.Tip;
+        r.Total    = dto.Total    ?? r.Total    ?? ((r.SubTotal ?? 0m) + (r.Tax ?? 0m) + (r.Tip ?? 0m));
 
-        // if no Total provided, compute from available pieces
-        entity.Total = dto.Total
-            ?? entity.Total
-            ?? (entity.SubTotal ?? 0m) + (entity.Tax ?? 0m) + (entity.Tip ?? 0m);
+        // Advance state on success; reset error
+        r.Status     = "Parsed";
+        r.ParseError = null;
+        r.UpdatedAt  = DateTimeOffset.UtcNow;
 
         await db.SaveChangesAsync(ct);
-        return entity.ToSummaryDto();
+        return r.ToSummaryDto();
     }
 
-    public async Task<ReceiptSummaryDto> UploadAsync(IFormFile file, CancellationToken ct = default)
+    // ---------------------------
+    // Upload (blob fields + metadata + enqueue)
+    // ---------------------------
+public async Task<ReceiptSummaryDto> UploadAsync(UploadReceiptItemDto dto, CancellationToken ct = default)
+{
+    var file = dto.File;
+    if (file is null || file.Length == 0)
+        throw new ArgumentException("File is required.", nameof(dto.File));
+    if (file.Length > 20_000_000)
+        throw new ArgumentException("File too large (>20MB).");
+
+    var receipt = new Receipt
     {
-        if (file is null || file.Length == 0) throw new ArgumentException("File is required.", nameof(file));
+        Id = Guid.NewGuid(),
+        CreatedAt = DateTimeOffset.UtcNow,
+        UpdatedAt = DateTimeOffset.UtcNow,
+        OwnerUserId = null, // populate when auth is wired
+        Status = "PendingParse",
+        Items = []
+    };
 
-        var receipt = new Receipt
-        {
-            Id = Guid.NewGuid(),
-            CreatedAt = DateTimeOffset.UtcNow,
-            OwnerUserId = null,
-            Status = ReceiptStatus.PendingParse,
-            OriginalFileUrl = "",
-            SubTotal = 0m,
-            Tax = 0m,
-            Tip = 0m,
-            Total = 0m,
-            Items = []
-        };
+    db.Receipts.Add(receipt);
+    await db.SaveChangesAsync(ct);
 
-        db.Receipts.Add(receipt);
-        await db.SaveChangesAsync(ct);
+    // Upload to blob with stable container/name and metadata
+    var container = blobSvc.GetBlobContainerClient("receipts");
+    await container.CreateIfNotExistsAsync(cancellationToken: ct);
 
-        // upload to blob
-        var container = blobSvc.GetBlobContainerClient("receipts");
-        await container.CreateIfNotExistsAsync(cancellationToken: ct);
+    var ext = Path.GetExtension(file.FileName);
+    var blobName = $"{receipt.Id:N}/{Path.GetRandomFileName()}{ext}";
+    var blob = container.GetBlobClient(blobName);
 
-        var ext = Path.GetExtension(file.FileName);
-        var blobName = $"{receipt.Id}/{Path.GetRandomFileName()}{ext}";
-        var blob = container.GetBlobClient(blobName);
+    var headers = new Azure.Storage.Blobs.Models.BlobHttpHeaders
+    {
+        ContentType = string.IsNullOrWhiteSpace(file.ContentType)
+            ? "application/octet-stream"
+            : file.ContentType
+    };
 
-        // set content type
-        var headers = new Azure.Storage.Blobs.Models.BlobHttpHeaders { ContentType = file.ContentType ?? "application/octet-stream" };
-        await using var s = file.OpenReadStream();
-        await blob.UploadAsync(s, httpHeaders: headers, cancellationToken: ct);
+    // Put extra fields into blob metadata (so you don’t need DB changes yet)
+    var metadata = new Dictionary<string, string>
+    {
+        ["receiptId"] = receipt.Id.ToString(),
+        ["uploadedAt"] = DateTimeOffset.UtcNow.ToString("o"),
+        ["storeName"] = dto.StoreName ?? string.Empty,
+        ["purchasedAt"] = dto.PurchasedAt?.ToString("o") ?? string.Empty,
+        ["notes"] = dto.Notes ?? string.Empty
+    };
 
-        // persist URL
-        receipt.OriginalFileUrl = blob.Uri.ToString();
-        await db.SaveChangesAsync(ct);
+    await using (var s = file.OpenReadStream())
+    {
+        await blob.DeleteIfExistsAsync(cancellationToken: ct);
 
-        // enqueue parse job
-        await parseQueue.EnqueueAsync(new(container.Name, blobName, receipt.Id.ToString()), ct);
-
-        return receipt.ToSummaryDto();
+        await blob.UploadAsync(
+            s,
+            new Azure.Storage.Blobs.Models.BlobUploadOptions
+            {
+                HttpHeaders = headers,
+                Metadata = metadata
+            },
+            ct
+        );
     }
+
+    // Persist blob details + URL and update timestamp
+    receipt.BlobContainer = container.Name;
+    receipt.BlobName = blobName;
+    receipt.OriginalFileUrl = blob.Uri.ToString();
+    receipt.UpdatedAt = DateTimeOffset.UtcNow;
+
+    await db.SaveChangesAsync(ct);
+
+    // Enqueue parse job (your existing abstraction)
+    await parseQueue.EnqueueAsync(new(container.Name, blobName, receipt.Id.ToString()), ct);
+
+    return receipt.ToSummaryDto();
+}
+
 }
