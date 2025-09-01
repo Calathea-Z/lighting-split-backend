@@ -4,15 +4,20 @@ using Api.Dtos;
 using Api.Interfaces;
 using Api.Mappers;
 using Api.Models;
+using Api.Options;
+using Azure.Storage;
 using Azure.Storage.Blobs;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 public sealed class ReceiptService(
     LightningDbContext db,
     BlobServiceClient blobSvc,
-    IParseQueue parseQueue
+    IParseQueue parseQueue,
+    IOptions<StorageOptions> storageOptions
 ) : IReceiptService
 {
+    private readonly StorageOptions _storage = storageOptions.Value;
     // ---------------------------
     // Create from DTO (server-side math + sane defaults)
     // ---------------------------
@@ -176,11 +181,12 @@ public sealed class ReceiptService(
         db.Receipts.Add(receipt);
         await db.SaveChangesAsync(ct);
 
-        // Upload to blob with stable container/name and metadata
-        var container = blobSvc.GetBlobContainerClient("receipts");
+        var containerName = _storage.ReceiptsContainer ?? "receipts";
+        var container = blobSvc.GetBlobContainerClient(containerName);
         await container.CreateIfNotExistsAsync(cancellationToken: ct);
 
         var ext = Path.GetExtension(file.FileName);
+        if (string.IsNullOrWhiteSpace(ext)) ext = ".bin";
         var blobName = $"{receipt.Id:N}/{Path.GetRandomFileName()}{ext}";
         var blob = container.GetBlobClient(blobName);
 
@@ -191,7 +197,6 @@ public sealed class ReceiptService(
                 : file.ContentType
         };
 
-        // Put extra fields into blob metadata (so you don’t need DB changes yet)
         var metadata = new Dictionary<string, string>
         {
             ["receiptId"] = receipt.Id.ToString(),
@@ -203,7 +208,8 @@ public sealed class ReceiptService(
 
         await using (var s = file.OpenReadStream())
         {
-            await blob.DeleteIfExistsAsync(cancellationToken: ct);
+            if (_storage.OverwriteOnUpload)
+                await blob.DeleteIfExistsAsync(cancellationToken: ct);
 
             await blob.UploadAsync(
                 s,
@@ -216,16 +222,14 @@ public sealed class ReceiptService(
             );
         }
 
-        // Persist blob details + URL and update timestamp
-        receipt.BlobContainer = container.Name;
+        receipt.BlobContainer = containerName;
         receipt.BlobName = blobName;
         receipt.OriginalFileUrl = blob.Uri.ToString();
         receipt.UpdatedAt = DateTimeOffset.UtcNow;
 
         await db.SaveChangesAsync(ct);
 
-        // Enqueue parse job (your existing abstraction)
-        await parseQueue.EnqueueAsync(new(container.Name, blobName, receipt.Id.ToString()), ct);
+        await parseQueue.EnqueueAsync(new(containerName, blobName, receipt.Id.ToString()), ct);
 
         return receipt.ToSummaryDto();
     }

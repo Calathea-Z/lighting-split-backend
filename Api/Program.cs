@@ -1,13 +1,17 @@
 using Api.Data;
+using Api.Interfaces;
+using Api.Options;
+using Api.Services;
 using Api.Storage;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.FileProviders;
 using Azure.Storage.Blobs;
 using Azure.Storage.Queues;
-using Api.Services;
-using Api.Interfaces;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.Configure<StorageOptions>(
+    builder.Configuration.GetSection("Storage"));
 
 // EF Core + PostgreSQL
 builder.Services.AddDbContext<LightningDbContext>(opts =>
