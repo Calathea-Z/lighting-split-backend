@@ -28,6 +28,9 @@ namespace Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<decimal?>("BaselineSubtotal")
+                        .HasColumnType("numeric(12,2)");
+
                     b.Property<string>("BlobContainer")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -38,10 +41,21 @@ namespace Api.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<decimal?>("ComputedItemsSubtotal")
+                        .HasColumnType("numeric(12,2)");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("timestamptz")
                         .HasDefaultValueSql("now()");
+
+                    b.Property<decimal?>("Discrepancy")
+                        .HasColumnType("numeric(12,2)");
+
+                    b.Property<bool>("NeedsReview")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.Property<string>("OriginalFileUrl")
                         .IsRequired()
@@ -58,6 +72,10 @@ namespace Api.Migrations
                     b.Property<string>("RawText")
                         .HasMaxLength(100000)
                         .HasColumnType("character varying(100000)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -91,6 +109,8 @@ namespace Api.Migrations
 
                     b.HasIndex("CreatedAt");
 
+                    b.HasIndex("NeedsReview");
+
                     b.HasIndex("OwnerUserId");
 
                     b.HasIndex("Status");
@@ -117,6 +137,11 @@ namespace Api.Migrations
 
                     b.Property<decimal?>("Discount")
                         .HasColumnType("numeric(12,2)");
+
+                    b.Property<bool>("IsSystemGenerated")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.Property<string>("Label")
                         .IsRequired()
