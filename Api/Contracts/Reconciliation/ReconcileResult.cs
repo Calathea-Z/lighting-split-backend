@@ -1,4 +1,6 @@
-﻿namespace Api.Contracts.Reconciliation
+﻿using Api.Abstractions.Receipts;
+
+namespace Api.Contracts.Reconciliation
 {
     public sealed record ReconcileResult(
         ParseStatus Status,

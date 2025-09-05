@@ -1,4 +1,5 @@
-using Api.Dtos;
+using Api.Dtos.Receipts.Requests;
+using Api.Dtos.Receipts.Requests.Items;
 using Api.Models;
 
 namespace Tests;

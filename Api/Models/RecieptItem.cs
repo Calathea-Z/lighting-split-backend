@@ -1,17 +1,22 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+using Microsoft.EntityFrameworkCore;
 
 namespace Api.Models;
 
+[Index(nameof(ReceiptId), nameof(Position))]
 public class ReceiptItem
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
-    // FK
+    // Foreign key
+    [Required]
     public Guid ReceiptId { get; set; }
+
     public Receipt Receipt { get; set; } = default!;
 
     // Descriptive
-    [MaxLength(200)]
+    [Required, MaxLength(200)]
     public string Label { get; set; } = "";
 
     [MaxLength(16)]
@@ -27,17 +32,25 @@ public class ReceiptItem
     public int Position { get; set; } = 0;
 
     // Quantities & money
-    // Fractional quantities supported (e.g., 0.75 lb)
-    public decimal Qty { get; set; } = 1m;       // numeric(9,3)
-    public decimal UnitPrice { get; set; } = 0m; // numeric(12,2)
+    [Precision(9, 3)]
+    public decimal Qty { get; set; } = 1m;  // fractional quantities supported
+
+    [Precision(12, 2)]
+    public decimal UnitPrice { get; set; } = 0m;
 
     // Optional per-line adjustments
+    [Precision(12, 2)]
     public decimal? Discount { get; set; } // amount off; store as positive value
-    public decimal? Tax { get; set; }      // per-line tax if available
+
+    [Precision(12, 2)]
+    public decimal? Tax { get; set; } // per-line tax if available
 
     // Denormalized line math (computed server-side on create/update)
+    [Precision(12, 2)]
     public decimal LineSubtotal { get; set; } = 0m; // Qty * UnitPrice - Discount
-    public decimal LineTotal { get; set; } = 0m;    // LineSubtotal + Tax
+
+    [Precision(12, 2)]
+    public decimal LineTotal { get; set; } = 0m; // LineSubtotal + Tax
 
     // Timestamps
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -46,4 +59,9 @@ public class ReceiptItem
     // Optimistic concurrency token (mapped to Postgres xmin)
     [Timestamp]
     public uint Version { get; set; }
+
+    /// <summary>
+    /// True if this was system-generated (e.g. "Adjustment" line).
+    /// </summary>
+    public bool IsSystemGenerated { get; set; } = false;
 }

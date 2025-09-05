@@ -1,0 +1,11 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+		<PackageId>Calathea.Api.Abstractions</PackageId>
+		<Version>0.1.1</Version>
+		<Authors>Calathea Web Design</Authors>
+		<RepositoryUrl>https://github.com/you/lighting-split</RepositoryUrl>
+		<Description>Shared primitives</Description>
+	</PropertyGroup>
+</Project>

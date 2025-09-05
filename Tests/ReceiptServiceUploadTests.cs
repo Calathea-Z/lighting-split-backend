@@ -1,15 +1,12 @@
-using Api.Contracts;
 using Api.Data;
-using Api.Dtos;
-using Api.Interfaces;
+using Api.Infrastructure.Interfaces;
 using Api.Options;
-using Api.Services;
+using Api.Services.Receipts;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Moq;
 
 namespace Tests;
 

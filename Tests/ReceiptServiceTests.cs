@@ -1,7 +1,9 @@
 using Api.Data;
-using Api.Dtos;
-using Api.Interfaces;
+using Api.Dtos.Receipts.Requests;
+using Api.Dtos.Receipts.Requests.Items;
+using Api.Infrastructure.Interfaces;
 using Api.Options;
+using Api.Services.Receipts;
 using Azure.Storage.Blobs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;

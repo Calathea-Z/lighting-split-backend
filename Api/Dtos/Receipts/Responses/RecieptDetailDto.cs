@@ -1,12 +1,14 @@
+using Api.Abstractions.Receipts;
 using Api.Dtos.Receipts.Responses.Items;
 using System.Text.Json.Serialization;
 
 namespace Api.Dtos.Receipts.Responses;
 
-// Full detail (used by detail screens / edit views)
 public sealed record ReceiptDetailDto(
     Guid Id,
-    string Status,
+
+    [property: JsonConverter(typeof(JsonStringEnumConverter))]
+    ReceiptStatus Status,
 
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RawText,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? SubTotal,

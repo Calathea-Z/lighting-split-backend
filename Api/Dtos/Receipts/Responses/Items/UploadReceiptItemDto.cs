@@ -17,14 +17,16 @@ public sealed class UploadReceiptItemDto : IValidatableObject
 
     public IEnumerable<ValidationResult> Validate(ValidationContext _)
     {
-        // Basic file checks
         if (File is null || File.Length == 0)
         {
             yield return new ValidationResult("A non-empty file is required.", new[] { nameof(File) });
             yield break;
         }
 
-        // Keep these in sync with UploadOptions
+        // Guard size (e.g. 10 MB)
+        if (File.Length > 10 * 1024 * 1024)
+            yield return new ValidationResult("File size cannot exceed 10 MB.", new[] { nameof(File) });
+
         var allowedTypes = new[] { "image/jpeg", "image/png", "image/webp", "application/pdf" };
         var allowedExts = new[] { ".jpg", ".jpeg", ".png", ".webp", ".pdf" };
 
@@ -33,18 +35,13 @@ public sealed class UploadReceiptItemDto : IValidatableObject
         var extOk = allowedExts.Contains(ext, StringComparer.OrdinalIgnoreCase);
 
         if (!contentTypeOk || !extOk)
-        {
             yield return new ValidationResult(
                 $"Unsupported file type: {File.ContentType} {ext}.",
                 new[] { nameof(File) });
-        }
 
-        // Guard: don't allow far-future purchase dates (7 days ahead)
         if (PurchasedAt is { } ts && ts > DateTimeOffset.UtcNow.AddDays(7))
-        {
             yield return new ValidationResult(
                 "PurchasedAt cannot be more than 7 days in the future.",
                 new[] { nameof(PurchasedAt) });
-        }
     }
 }

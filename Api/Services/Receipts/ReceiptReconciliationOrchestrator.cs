@@ -1,4 +1,5 @@
-﻿using Api.Common.Interfaces;
+﻿using Api.Abstractions.Receipts;
+using Api.Common.Interfaces;
 using Api.Contracts.Reconciliation;
 using Api.Data;
 using Api.Mappers;
@@ -21,21 +22,27 @@ namespace Api.Services.Receipts
             await RecomputeHeaderAsync(receiptId, ct);
 
             // 2) load receipt + items for reconciliation
-            var r = await db.Receipts.Include(x => x.Items).FirstAsync(x => x.Id == receiptId, ct);
+            var r = await db.Receipts
+                .Include(x => x.Items)
+                .FirstAsync(x => x.Id == receiptId, ct);
 
-            var parsed = BuildParsedReceipt(r);                 // uses your Parsed* types
-            var result = reconciliation.Reconcile(parsed);      // <- your service
+            var parsed = BuildParsedReceipt(r);
+            var result = reconciliation.Reconcile(parsed);
 
             // 3) persist transparency + status
             r.ComputedItemsSubtotal = result.ItemsSum;
             r.BaselineSubtotal = result.BaselineSubtotal;
             r.Discrepancy = result.Discrepancy;
             r.Reason = result.Reason;
-            r.Status = result.Status == ParseStatus.Parsed ? "Parsed" : "ParsedNeedsReview";
-            r.NeedsReview = r.Status == "ParsedNeedsReview";
+
+            r.Status = result.Status == ParseStatus.Success
+                ? ReceiptStatus.Parsed
+                : ReceiptStatus.ParsedNeedsReview;
+
+            r.NeedsReview = r.Status == ReceiptStatus.ParsedNeedsReview;
             r.UpdatedAt = clock.UtcNow;
 
-            // 4) upsert Adjustment line if needed (don’t include it in baseline math)
+            // 4) upsert Adjustment line if needed
             await UpsertAdjustment(r, result, ct);
             await db.SaveChangesAsync(ct);
 

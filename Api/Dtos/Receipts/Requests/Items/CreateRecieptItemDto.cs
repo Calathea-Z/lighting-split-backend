@@ -33,20 +33,22 @@ public sealed class CreateReceiptItemDto : IValidatableObject
 
     public IEnumerable<ValidationResult> Validate(ValidationContext _)
     {
-        // Basic scale guards
+        Label = Label?.Trim() ?? "";
+        Unit = string.IsNullOrWhiteSpace(Unit) ? null : Unit.Trim();
+        Category = string.IsNullOrWhiteSpace(Category) ? null : Category.Trim();
+        Notes = string.IsNullOrWhiteSpace(Notes) ? null : Notes.Trim();
+
+        if (string.IsNullOrWhiteSpace(Label))
+            yield return VR("Label is required.", nameof(Label));
+
         if (!HasMaxScale(Qty, 3)) yield return VR("Qty supports up to 3 decimal places.", nameof(Qty));
         if (!HasMaxScale(UnitPrice, 2)) yield return VR("UnitPrice supports up to 2 decimal places.", nameof(UnitPrice));
         if (Discount is { } d && !HasMaxScale(d, 2)) yield return VR("Discount supports up to 2 decimal places.", nameof(Discount));
         if (Tax is { } t && !HasMaxScale(t, 2)) yield return VR("Tax supports up to 2 decimal places.", nameof(Tax));
 
-        // Discount cannot exceed line subtotal (Qty * UnitPrice)
         var lineSubtotal = Qty * UnitPrice;
         if (Discount is { } disc && disc > lineSubtotal + 0.01m)
             yield return VR("Discount cannot exceed line subtotal.", nameof(Discount));
-
-        // Prevent absurdly large strings of whitespace
-        if (string.IsNullOrWhiteSpace(Label))
-            yield return VR("Label is required.", nameof(Label));
     }
 
     private static bool HasMaxScale(decimal value, int maxScale)

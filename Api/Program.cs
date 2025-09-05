@@ -73,7 +73,7 @@ builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddScoped<IReceiptService, ReceiptService>();
 builder.Services.AddScoped<IReceiptItemsService, ReceiptItemsService>();
 builder.Services.AddScoped<IReceiptReconciliationOrchestrator, ReceiptReconciliationOrchestrator>();
-builder.Services.AddScoped<IReceiptReconciliationCalculator, RecieptReconciliationCalculator>();
+builder.Services.AddScoped<IReceiptReconciliationCalculator, ReceiptReconciliationCalculator>();
 
 var app = builder.Build();
 

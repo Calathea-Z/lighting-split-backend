@@ -1,3 +1,4 @@
+using Api.Abstractions.Receipts;
 using Api.Common.Interfaces;
 using Api.Data;
 using Api.Dtos.Receipts.Requests;
@@ -34,10 +35,14 @@ public sealed class ReceiptService(
             throw new ArgumentException("Item quantities must be > 0 and prices must be >= 0.", nameof(dto.Items));
 
         var entity = dto.ToEntity();
+
+        // Id / timestamps (guard if mapper already sets them)
         entity.Id = entity.Id == Guid.Empty ? Guid.NewGuid() : entity.Id;
         entity.CreatedAt = entity.CreatedAt == default ? clock.UtcNow : entity.CreatedAt;
         entity.UpdatedAt = clock.UtcNow;
-        entity.Status = string.IsNullOrWhiteSpace(entity.Status) ? "Parsed" : entity.Status;
+
+        // ENUM default instead of string
+        entity.Status = entity.Status == default ? ReceiptStatus.Parsed : entity.Status;
 
         foreach (var i in entity.Items)
         {
@@ -46,17 +51,19 @@ public sealed class ReceiptService(
             i.UpdatedAt = clock.UtcNow;
         }
 
+        // Apply header totals if provided, else keep mapper values
         entity.SubTotal = dto.SubTotal ?? entity.SubTotal;
         entity.Tax = dto.Tax ?? entity.Tax;
         entity.Tip = dto.Tip ?? entity.Tip;
         entity.Total = dto.Total ?? entity.Total;
 
-        // If totals omitted, roll up from items
+        // If totals omitted, roll up from items (rounded)
         if (entity.SubTotal is null || entity.Total is null)
         {
-            var sub = entity.Items.Sum(x => x.LineSubtotal);
-            var tax = entity.Items.Sum(x => x.Tax ?? 0m);
-            var tot = entity.Items.Sum(x => x.LineTotal);
+            var sub = Money.Round2(entity.Items.Sum(x => x.LineSubtotal));
+            var tax = Money.Round2(entity.Items.Sum(x => x.Tax ?? 0m));
+            var tot = Money.Round2(entity.Items.Sum(x => x.LineTotal));
+
             entity.SubTotal ??= (sub == 0m ? null : sub);
             entity.Tax ??= (tax == 0m ? null : tax);
             entity.Total ??= (tot == 0m ? null : tot);
@@ -65,7 +72,7 @@ public sealed class ReceiptService(
         db.Receipts.Add(entity);
         await db.SaveChangesAsync(ct);
 
-        // Centralized reconciliation (rollups, transparency fields, Adjustment)
+        // Centralized reconciliation (sets transparency fields + may adjust status)
         await reconciler.ReconcileAsync(entity.Id, ct);
 
         return entity.ToSummaryDto();
@@ -196,7 +203,7 @@ public sealed class ReceiptService(
             CreatedAt = clock.UtcNow,
             UpdatedAt = clock.UtcNow,
             OwnerUserId = null,
-            Status = "PendingParse",
+            Status = ReceiptStatus.PendingParse,
             Items = []
         };
 
@@ -257,16 +264,17 @@ public sealed class ReceiptService(
         return receipt.ToSummaryDto();
     }
 
-    public async Task<bool> MarkParseFailedAsync(Guid id, string error, CancellationToken ct = default)
+    public async Task<bool> MarkParseFailedAsync(Guid id, string? error, CancellationToken ct = default)
     {
-        var msg = error ?? "Unknown parse error.";
+        var msg = string.IsNullOrWhiteSpace(error) ? "Unknown parse error." : error;
         if (msg.Length > 2000) msg = msg[..2000];
 
         var rows = await db.Receipts
             .Where(r => r.Id == id)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(r => r.Status, _ => "FailedParse")
+                .SetProperty(r => r.Status, _ => ReceiptStatus.FailedParse)
                 .SetProperty(r => r.ParseError, _ => msg)
+                .SetProperty(r => r.NeedsReview, _ => true)
                 .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
 
         return rows > 0;

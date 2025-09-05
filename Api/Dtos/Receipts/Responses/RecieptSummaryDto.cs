@@ -1,3 +1,4 @@
+using Api.Abstractions.Receipts;
 using System.Text.Json.Serialization;
 
 namespace Api.Dtos.Receipts.Responses;
@@ -5,7 +6,9 @@ namespace Api.Dtos.Receipts.Responses;
 // High-level, lightweight view (used by lists and quick UI refreshes)
 public sealed record ReceiptSummaryDto(
     Guid Id,
-    string Status,
+
+    [property: JsonConverter(typeof(JsonStringEnumConverter))]
+    ReceiptStatus Status,
 
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? SubTotal,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? Tax,
