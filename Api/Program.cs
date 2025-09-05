@@ -1,3 +1,5 @@
+using Api.Common.Interfaces;
+using Api.Common.Services;
 using Api.Data;
 using Api.Interfaces;
 using Api.Options;
@@ -62,6 +64,8 @@ if (!string.IsNullOrWhiteSpace(storageConn))
 
 // ---------- App Services ----------
 builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
+builder.Services.AddSingleton<IClock, SystemClock>();
+
 builder.Services.AddScoped<IReceiptService, ReceiptService>();
 builder.Services.AddScoped<IReconciliationService, ReconciliationService>();
 
