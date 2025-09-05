@@ -1,5 +1,8 @@
-using Api.Dtos;
-using Microsoft.AspNetCore.Http;
+using Api.Dtos.Receipts.Requests;
+using Api.Dtos.Receipts.Responses;
+using Api.Dtos.Receipts.Responses.Items;
+
+namespace Api.Interfaces;
 
 public interface IReceiptService
 {
@@ -9,10 +12,8 @@ public interface IReceiptService
     Task<bool> DeleteAsync(Guid id, CancellationToken ct = default);
     Task<ReceiptSummaryDto?> UpdateTotalsAsync(Guid id, UpdateTotalsDto dto, CancellationToken ct = default);
     Task<bool> MarkParseFailedAsync(Guid id, string error, CancellationToken ct = default);
-
     Task<ReceiptSummaryDto> UploadAsync(UploadReceiptItemDto dto, CancellationToken ct = default);
-
-    Task<ReceiptItemDto?> AddItemAsync(Guid receiptId, CreateReceiptItemDto dto, CancellationToken ct = default);
-    Task<ReceiptItemDto?> UpdateItemAsync(Guid receiptId, Guid itemId, UpdateReceiptItemDto dto, CancellationToken ct = default);
-    Task<bool> DeleteItemAsync(Guid receiptId, Guid itemId, uint? version, CancellationToken ct = default);
+    Task<ReceiptSummaryDto?> UpdateRawTextAsync(Guid id, UpdateRawTextDto dto, CancellationToken ct = default);
+    Task<ReceiptSummaryDto?> UpdateStatusAsync(Guid id, UpdateStatusDto dto, CancellationToken ct = default);
+    Task<ReceiptSummaryDto?> UpdateReviewAsync(Guid id, UpdateReviewDto dto, CancellationToken ct = default);
 }

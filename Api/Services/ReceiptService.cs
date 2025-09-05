@@ -1,11 +1,12 @@
-// Api/Services/ReceiptService.cs
+using Api.Common.Interfaces;
 using Api.Data;
-using Api.Dtos;
+using Api.Dtos.Receipts.Requests;
+using Api.Dtos.Receipts.Responses;
+using Api.Dtos.Receipts.Responses.Items;
 using Api.Interfaces;
 using Api.Mappers;
 using Api.Models;
 using Api.Options;
-using Azure.Storage;
 using Azure.Storage.Blobs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -14,13 +15,13 @@ public sealed class ReceiptService(
     LightningDbContext db,
     BlobServiceClient blobSvc,
     IParseQueue parseQueue,
-    IOptions<StorageOptions> storageOptions
+    IOptions<StorageOptions> storageOptions,
+    IReconciliationService reconciliation,
+    IClock clock
 ) : IReceiptService
 {
     private readonly StorageOptions _storage = storageOptions.Value;
-    // ---------------------------
-    // Create from DTO (server-side math + sane defaults)
-    // ---------------------------
+
     public async Task<ReceiptSummaryDto> CreateAsync(CreateReceiptDto dto, CancellationToken ct = default)
     {
         if (dto is null) throw new ArgumentException("Body is required.", nameof(dto));
@@ -29,22 +30,25 @@ public sealed class ReceiptService(
         if (dto.Items.Any(i => i.Qty <= 0 || i.UnitPrice < 0))
             throw new ArgumentException("Item quantities must be > 0 and prices must be >= 0.", nameof(dto.Items));
 
-        // If you already have dto.ToEntity(), keep it; then normalize:
-        var entity = dto.ToEntity(); // assumes you map CreateReceiptItemDto -> ReceiptItem etc.
+        var entity = dto.ToEntity();
         entity.Id = entity.Id == Guid.Empty ? Guid.NewGuid() : entity.Id;
-        entity.CreatedAt = entity.CreatedAt == default ? DateTimeOffset.UtcNow : entity.CreatedAt;
-        entity.UpdatedAt = DateTimeOffset.UtcNow;
+        entity.CreatedAt = entity.CreatedAt == default ? clock.UtcNow : entity.CreatedAt;
+        entity.UpdatedAt = clock.UtcNow;
         entity.Status = string.IsNullOrWhiteSpace(entity.Status) ? "Parsed" : entity.Status;
 
-        // Recalculate all line items (line math & timestamps)
         foreach (var i in entity.Items)
         {
-            ReceiptMappers.Recalculate(i);
-            i.CreatedAt = i.CreatedAt == default ? DateTimeOffset.UtcNow : i.CreatedAt;
-            i.UpdatedAt = DateTimeOffset.UtcNow;
+            ReceiptItemMaps.Recalculate(i);
+            i.CreatedAt = i.CreatedAt == default ? clock.UtcNow : i.CreatedAt;
+            i.UpdatedAt = clock.UtcNow;
         }
 
-        // If totals were omitted, roll up from items
+        entity.SubTotal = dto.SubTotal ?? entity.SubTotal;
+        entity.Tax = dto.Tax ?? entity.Tax;
+        entity.Tip = dto.Tip ?? entity.Tip;
+        entity.Total = dto.Total ?? entity.Total;
+
+        // If totals omitted, roll up from items
         if (entity.SubTotal is null || entity.Total is null)
         {
             var sub = entity.Items.Sum(x => x.LineSubtotal);
@@ -58,30 +62,25 @@ public sealed class ReceiptService(
         db.Receipts.Add(entity);
         await db.SaveChangesAsync(ct);
 
+        await ApplyReconciliationAsync(entity.Id, ct);
         return entity.ToSummaryDto();
     }
 
-    // ---------------------------
-    // Read (detail)
-    // ---------------------------
     public async Task<ReceiptDetailDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
     {
         var r = await db.Receipts
+            .AsNoTracking()
             .Include(x => x.Items)
             .FirstOrDefaultAsync(x => x.Id == id, ct);
 
         return r?.ToDetailDto();
     }
 
-    // ---------------------------
-    // List (summary projection; no Include needed)
-    // ---------------------------
     public async Task<IReadOnlyList<ReceiptSummaryDto>> ListAsync(string? ownerUserId, int skip, int take, CancellationToken ct = default)
     {
         take = Math.Clamp(take, 1, 200);
 
         var q = db.Receipts.AsNoTracking();
-
         if (!string.IsNullOrWhiteSpace(ownerUserId))
             q = q.Where(r => r.OwnerUserId == ownerUserId);
 
@@ -96,17 +95,18 @@ public sealed class ReceiptService(
                 r.Total,
                 r.CreatedAt,
                 r.UpdatedAt,
-                r.Items.Count
+                r.Items.Count,
+                r.ComputedItemsSubtotal,
+                r.BaselineSubtotal,
+                r.Discrepancy,
+                r.Reason,
+                r.NeedsReview
             ))
             .Skip(skip)
             .Take(take)
             .ToListAsync(ct);
     }
-
-
-    // ---------------------------
-    // Delete (best-effort blob cleanup)
-    // ---------------------------
+    
     public async Task<bool> DeleteAsync(Guid id, CancellationToken ct = default)
     {
         var r = await db.Receipts.FirstOrDefaultAsync(x => x.Id == id, ct);
@@ -115,7 +115,6 @@ public sealed class ReceiptService(
         db.Receipts.Remove(r);
         await db.SaveChangesAsync(ct);
 
-        // Try to delete blob if we know where it is (ignore failures)
         if (!string.IsNullOrWhiteSpace(r.BlobContainer) && !string.IsNullOrWhiteSpace(r.BlobName))
         {
             try
@@ -126,40 +125,57 @@ public sealed class ReceiptService(
             }
             catch { /* swallow */ }
         }
-
         return true;
     }
 
-    // ---------------------------
-    // Update totals (idempotent; uses line rollups as fallback)
-    // ---------------------------
     public async Task<ReceiptSummaryDto?> UpdateTotalsAsync(Guid id, UpdateTotalsDto dto, CancellationToken ct = default)
     {
-        var r = await db.Receipts.Include(x => x.Items).FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (r is null) return null;
+        var exists = await db.Receipts.AnyAsync(x => x.Id == id, ct);
+        if (!exists) return null;
 
-        // Use persisted line math when available
-        var lineSub = r.Items.Sum(i => i.LineSubtotal);
-        var lineTax = r.Items.Sum(i => i.Tax ?? 0m);
-        var lineTot = r.Items.Sum(i => i.LineTotal);
+        var agg = await db.ReceiptItems
+            .Where(i => i.ReceiptId == id)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Sub = g.Sum(x => x.LineSubtotal),
+                Tax = g.Sum(x => x.Tax ?? 0m),
+                Tot = g.Sum(x => x.LineTotal)
+            })
+            .SingleOrDefaultAsync(ct);
 
-        r.SubTotal = dto.SubTotal ?? r.SubTotal ?? (lineSub == 0m ? null : lineSub);
-        r.Tax = dto.Tax ?? r.Tax ?? (lineTax == 0m ? null : lineTax);
-        r.Tip = dto.Tip ?? r.Tip;
-        r.Total = dto.Total ?? r.Total ?? ((r.SubTotal ?? 0m) + (r.Tax ?? 0m) + (r.Tip ?? 0m));
+        // Compute final values (prefer DTO > existing > rollup)
+        var current = await db.Receipts.AsNoTracking()
+            .Where(r => r.Id == id)
+            .Select(r => new { r.SubTotal, r.Tax, r.Tip, r.Total })
+            .FirstAsync(ct);
 
-        // Advance state on success; reset error
-        r.Status = "Parsed";
-        r.ParseError = null;
-        r.UpdatedAt = DateTimeOffset.UtcNow;
+        var sub = dto.SubTotal ?? current.SubTotal ?? (agg == null ? null : (decimal?)agg.Sub);
+        var tax = dto.Tax ?? current.Tax ?? (agg == null || agg.Tax == 0m ? null : (decimal?)agg.Tax);
+        var tip = dto.Tip ?? current.Tip;
+        var tot = dto.Total ?? current.Total ?? ((sub ?? 0m) + (tax ?? 0m) + (tip ?? 0m));
 
-        await db.SaveChangesAsync(ct);
-        return r.ToSummaryDto();
+        await db.Receipts
+            .Where(r => r.Id == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.SubTotal, _ => sub)
+                .SetProperty(r => r.Tax, _ => tax)
+                .SetProperty(r => r.Tip, _ => tip)
+                .SetProperty(r => r.Total, _ => tot)
+                .SetProperty(r => r.ParseError, _ => (string?)null)
+                .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
+
+        await ApplyReconciliationAsync(id, ct);
+
+        return await db.Receipts.AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(r => new ReceiptSummaryDto(
+                r.Id, r.Status, r.SubTotal, r.Tax, r.Tip, r.Total,
+                r.CreatedAt, r.UpdatedAt, r.Items.Count, r.ComputedItemsSubtotal,
+                r.BaselineSubtotal, r.Discrepancy, r.Reason, r.NeedsReview))
+            .FirstAsync(ct);
     }
 
-    // ---------------------------
-    // Upload (blob fields + metadata + enqueue)
-    // ---------------------------
     public async Task<ReceiptSummaryDto> UploadAsync(UploadReceiptItemDto dto, CancellationToken ct = default)
     {
         var file = dto.File;
@@ -171,9 +187,9 @@ public sealed class ReceiptService(
         var receipt = new Receipt
         {
             Id = Guid.NewGuid(),
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow,
-            OwnerUserId = null, // populate when auth is wired
+            CreatedAt = clock.UtcNow,
+            UpdatedAt = clock.UtcNow,
+            OwnerUserId = null,
             Status = "PendingParse",
             Items = []
         };
@@ -200,7 +216,7 @@ public sealed class ReceiptService(
         var metadata = new Dictionary<string, string>
         {
             ["receiptId"] = receipt.Id.ToString(),
-            ["uploadedAt"] = DateTimeOffset.UtcNow.ToString("o"),
+            ["uploadedAt"] = clock.UtcNow.ToString("o"),
             ["storeName"] = dto.StoreName ?? string.Empty,
             ["purchasedAt"] = dto.PurchasedAt?.ToString("o") ?? string.Empty,
             ["notes"] = dto.Notes ?? string.Empty
@@ -225,10 +241,9 @@ public sealed class ReceiptService(
         receipt.BlobContainer = containerName;
         receipt.BlobName = blobName;
         receipt.OriginalFileUrl = blob.Uri.ToString();
-        receipt.UpdatedAt = DateTimeOffset.UtcNow;
+        receipt.UpdatedAt = clock.UtcNow;
 
         await db.SaveChangesAsync(ct);
-
         await parseQueue.EnqueueAsync(new(containerName, blobName, receipt.Id.ToString()), ct);
 
         return receipt.ToSummaryDto();
@@ -236,106 +251,174 @@ public sealed class ReceiptService(
 
     public async Task<bool> MarkParseFailedAsync(Guid id, string error, CancellationToken ct = default)
     {
-        var r = await db.Receipts.FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (r is null) return false;
-
-        // clamp to column limit (we set 2000)
-        var msg = error ?? "Unknown parse error.";
+        var msg = (error ?? "Unknown parse error.");
         if (msg.Length > 2000) msg = msg[..2000];
 
-        r.Status = "FailedParse";
-        r.ParseError = msg;
-        r.UpdatedAt = DateTimeOffset.UtcNow;
+        var rows = await db.Receipts
+            .Where(r => r.Id == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, _ => "FailedParse")
+                .SetProperty(r => r.ParseError, _ => msg)
+                .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
 
+        return rows > 0;
+    }
+
+    public async Task<ReceiptSummaryDto?> UpdateRawTextAsync(Guid id, UpdateRawTextDto dto, CancellationToken ct = default)
+    {
+        var trimmed = dto.RawText?.Trim();
+
+        var rows = await db.Receipts
+            .Where(r => r.Id == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.RawText, _ => trimmed)
+                .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
+
+        if (rows == 0) return null;
+
+        return await db.Receipts.AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(r => r.ToSummaryDto())
+            .FirstAsync(ct);
+    }
+
+    public async Task<ReceiptSummaryDto?> UpdateStatusAsync(Guid id, UpdateStatusDto dto, CancellationToken ct = default)
+    {
+        var rows = await db.Receipts
+            .Where(r => r.Id == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, _ => dto.Status)
+                .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
+
+        if (rows == 0) return null;
+
+        return await db.Receipts.AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(r => r.ToSummaryDto())
+            .FirstAsync(ct);
+    }
+
+    public async Task<ReceiptSummaryDto?> UpdateReviewAsync(Guid id, UpdateReviewDto dto, CancellationToken ct = default)
+    {
+        var rows = await db.Receipts
+            .Where(r => r.Id == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.NeedsReview, _ => dto.NeedsReview)
+                .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
+
+        if (rows == 0) return null;
+
+        return await db.Receipts.AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(r => r.ToSummaryDto())
+            .FirstAsync(ct);
+    }
+
+    #region Helpers
+    private async Task RecomputeReceiptTotalsAsync(Guid receiptId, CancellationToken ct)
+    {
+        var agg = await db.ReceiptItems
+            .Where(x => x.ReceiptId == receiptId)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Sub = g.Sum(x => x.LineSubtotal),
+                Tax = g.Sum(x => x.Tax ?? 0m),
+                Tot = g.Sum(x => x.LineTotal)
+            })
+            .SingleOrDefaultAsync(ct);
+
+        await db.Receipts
+            .Where(r => r.Id == receiptId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.SubTotal, _ => agg == null ? (decimal?)null : DecimalRound2(agg.Sub))
+                .SetProperty(r => r.Tax, _ => agg == null || agg.Tax == 0m ? (decimal?)null : DecimalRound2(agg.Tax))
+                .SetProperty(r => r.Total, _ => agg == null ? (decimal?)null : DecimalRound2(agg.Tot))
+                .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
+    }
+
+    private static decimal DecimalRound2(decimal v) =>
+        decimal.Round(v, 2, MidpointRounding.AwayFromZero);
+
+    private async Task ApplyReconciliationAsync(Guid receiptId, CancellationToken ct)
+    {
+        // We need items here, so tracked entity is fine.
+        var r = await db.Receipts.Include(x => x.Items).FirstAsync(x => x.Id == receiptId, ct);
+
+        var parsed = BuildParsedReceipt(r);
+        var result = reconciliation.Reconcile(parsed);
+
+        r.ComputedItemsSubtotal = result.ItemsSum;
+        r.BaselineSubtotal = result.BaselineSubtotal;
+        r.Discrepancy = result.Discrepancy;
+        r.Reason = result.Reason;
+
+        r.Status = result.Status == ParseStatus.Parsed ? "Parsed" : "ParsedNeedsReview";
+        r.NeedsReview = r.Status == "ParsedNeedsReview";
+        r.UpdatedAt = clock.UtcNow;
+
+        await UpsertAdjustmentAsync(r, result, ct);
         await db.SaveChangesAsync(ct);
-        return true;
     }
 
-    public async Task<ReceiptItemDto?> AddItemAsync(Guid receiptId, CreateReceiptItemDto dto, CancellationToken ct = default)
-{
-    var r = await db.Receipts.Include(x => x.Items).FirstOrDefaultAsync(x => x.Id == receiptId, ct);
-    if (r is null) return null;
-
-    var i = dto.ToEntity(receiptId);
-    db.ReceiptItems.Add(i);
-
-    // optional rollup if header totals are missing
-    r.UpdatedAt = DateTimeOffset.UtcNow;
-    var (sub, tax, tot) = r.Rollup();
-    r.SubTotal ??= sub;
-    r.Tax      ??= tax;
-    r.Total    ??= tot;
-
-    await db.SaveChangesAsync(ct);
-    return i.ToDto();
-}
-
-public async Task<ReceiptItemDto?> UpdateItemAsync(Guid receiptId, Guid itemId, UpdateReceiptItemDto dto, CancellationToken ct = default)
-{
-    var i = await db.ReceiptItems.FirstOrDefaultAsync(x => x.Id == itemId && x.ReceiptId == receiptId, ct);
-    if (i is null) return null;
-
-    // Enforce optimistic concurrency using the client's Version (xmin)
-    db.Entry(i).Property(x => x.Version).OriginalValue = dto.Version;
-
-    i.ApplyUpdate(dto);
-
-    // Touch parent receipt UpdatedAt; optionally update header if totals are missing
-    var r = await db.Receipts.FirstAsync(x => x.Id == receiptId, ct);
-    r.UpdatedAt = DateTimeOffset.UtcNow;
-    if (r.SubTotal is null || r.Total is null || r.Tax is null)
+    private static ParsedReceipt BuildParsedReceipt(Receipt r)
     {
-        var items = await db.ReceiptItems.Where(x => x.ReceiptId == receiptId).ToListAsync(ct);
-        r.SubTotal ??= items.Sum(x => x.LineSubtotal);
-        var taxSum = items.Sum(x => x.Tax ?? 0m);
-        r.Tax ??= (taxSum == 0m ? null : taxSum);
-        r.Total ??= items.Sum(x => x.LineTotal);
+        var items = r.Items
+            .Where(i => !i.IsSystemGenerated)
+            .Select(i => new ParsedItem(
+                Description: i.Label ?? string.Empty,
+                Qty: (int)Math.Round(i.Qty <= 0 ? 1m : i.Qty, MidpointRounding.AwayFromZero),
+                UnitPrice: decimal.Round(i.UnitPrice, 2, MidpointRounding.AwayFromZero)
+            ))
+            .ToList();
+
+        var totals = new ParsedMoneyTotals(
+            Subtotal: r.SubTotal,
+            Tax: r.Tax,
+            Tip: r.Tip,
+            Total: r.Total
+        );
+
+        return new ParsedReceipt(items, totals, r.RawText ?? string.Empty);
     }
 
-    try
+    private async Task UpsertAdjustmentAsync(Receipt r, ReconcileResult result, CancellationToken ct)
     {
-        await db.SaveChangesAsync(ct);
+        var adj = r.Items.FirstOrDefault(x => x.IsSystemGenerated && x.Label == "Adjustment");
+
+        if (!result.NeedsAdjustment)
+        {
+            if (adj is not null)
+            {
+                db.ReceiptItems.Remove(adj);
+                await db.SaveChangesAsync(ct);
+            }
+            return;
+        }
+
+        var delta = decimal.Round(result.BaselineSubtotal - result.ItemsSum, 2, MidpointRounding.AwayFromZero);
+
+        if (adj is null)
+        {
+            adj = new ReceiptItem
+            {
+                ReceiptId = r.Id,
+                Label = "Adjustment",
+                IsSystemGenerated = true,
+                Qty = 1,
+                UnitPrice = delta
+            };
+            ReceiptItemMaps.Recalculate(adj);
+            db.ReceiptItems.Add(adj);
+        }
+        else
+        {
+            adj.UnitPrice = delta;
+            ReceiptItemMaps.Recalculate(adj);
+            db.ReceiptItems.Update(adj);
+        }
+
+        await RecomputeReceiptTotalsAsync(r.Id, ct);
     }
-    catch (DbUpdateConcurrencyException)
-    {
-        // surface a clean 409 to the controller
-        throw new InvalidOperationException("Concurrency conflict. Reload the item and try again.");
-    }
-
-    return i.ToDto();
-}
-
-public async Task<bool> DeleteItemAsync(Guid receiptId, Guid itemId, uint? version, CancellationToken ct = default)
-{
-    var i = await db.ReceiptItems.FirstOrDefaultAsync(x => x.Id == itemId && x.ReceiptId == receiptId, ct);
-    if (i is null) return false;
-
-    // If caller provided a Version, enforce it
-    if (version.HasValue)
-        db.Entry(i).Property(x => x.Version).OriginalValue = version.Value;
-
-    db.ReceiptItems.Remove(i);
-
-    // Touch parent receipt and, if header totals are derived, recompute
-    var r = await db.Receipts.Include(x => x.Items).FirstAsync(x => x.Id == receiptId, ct);
-    r.UpdatedAt = DateTimeOffset.UtcNow;
-    if (r.SubTotal is null || r.Total is null || r.Tax is null)
-    {
-        var (sub, tax, tot) = r.Rollup();
-        r.SubTotal = sub;
-        r.Tax      = tax;
-        r.Total    = tot;
-    }
-
-    try
-    {
-        await db.SaveChangesAsync(ct);
-        return true;
-    }
-    catch (DbUpdateConcurrencyException)
-    {
-        throw new InvalidOperationException("Concurrency conflict while deleting the item.");
-    }
-}
-
+    #endregion
 }
