@@ -2,7 +2,7 @@
 using Api.Dtos.Receipts.Requests;
 using Api.Dtos.Receipts.Responses;
 using Api.Dtos.Receipts.Responses.Items;
-using Api.Interfaces;
+using Api.Services.Receipts.Abstractions;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Api.Controllers;

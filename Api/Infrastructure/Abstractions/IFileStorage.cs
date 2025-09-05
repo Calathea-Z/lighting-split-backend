@@ -1,4 +1,4 @@
-namespace Api.Storage;
+namespace Api.Infrastructure.Interfaces;
 
 public sealed record StoredFile(string Url, string RelativePath, string FileName, long Size, string ContentType);
 

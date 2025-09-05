@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Options;
 using System.IO;
 
-namespace Api.Options;
+namespace Api.Options.Validators;
 
 public sealed class UploadOptionsValidator : IValidateOptions<UploadOptions>
 {

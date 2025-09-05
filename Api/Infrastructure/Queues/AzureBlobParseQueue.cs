@@ -1,11 +1,11 @@
 using System.Text.Json;
-using Api.Contracts;
-using Api.Interfaces;
+using Api.Contracts.Receipts;
+using Api.Infrastructure.Interfaces;
 using Azure.Storage.Queues;
 
-namespace Api.Services;
+namespace Api.Infrastructure.Queues;
 
-public sealed class AzureStorageParseQueue(QueueServiceClient svc) : IParseQueue
+public sealed class AzureBlobParseQueue(QueueServiceClient svc) : IParseQueue
 {
     private readonly QueueClient _q = svc.GetQueueClient("receipt-parse");
 

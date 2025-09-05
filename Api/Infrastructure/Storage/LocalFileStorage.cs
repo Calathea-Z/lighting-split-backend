@@ -1,7 +1,8 @@
+using Api.Infrastructure.Interfaces;
 using Api.Options;
 using Microsoft.Extensions.Options;
 
-namespace Api.Storage;
+namespace Api.Infrastructure.Storage;
 
 /// <summary>
 /// Stores uploaded files on the local filesystem under a configured root folder,

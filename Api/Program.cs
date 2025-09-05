@@ -1,10 +1,14 @@
 using Api.Common.Interfaces;
 using Api.Common.Services;
 using Api.Data;
-using Api.Interfaces;
+using Api.Infrastructure.Interfaces;
+using Api.Infrastructure.Queues;
+using Api.Infrastructure.Storage;
 using Api.Options;
-using Api.Services;
-using Api.Storage;
+using Api.Options.Validators;
+using Api.Services.Receipts;
+using Api.Services.Receipts.Abstractions;
+using Api.Services.Reconciliation.Abstractions;
 using Azure.Storage.Blobs;
 using Azure.Storage.Queues;
 using Microsoft.EntityFrameworkCore;
@@ -59,7 +63,7 @@ if (!string.IsNullOrWhiteSpace(storageConn))
 {
     builder.Services.AddSingleton(new BlobServiceClient(storageConn));
     builder.Services.AddSingleton(new QueueServiceClient(storageConn));
-    builder.Services.AddSingleton<IParseQueue, AzureStorageParseQueue>();
+    builder.Services.AddSingleton<IParseQueue, AzureBlobParseQueue>();
 }
 
 // ---------- App Services ----------
@@ -67,7 +71,9 @@ builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
 builder.Services.AddSingleton<IClock, SystemClock>();
 
 builder.Services.AddScoped<IReceiptService, ReceiptService>();
-builder.Services.AddScoped<IReconciliationService, ReconciliationService>();
+builder.Services.AddScoped<IReceiptItemsService, ReceiptItemsService>();
+builder.Services.AddScoped<IReceiptReconciliationOrchestrator, ReceiptReconciliationOrchestrator>();
+builder.Services.AddScoped<IReceiptReconciliationCalculator, RecieptReconciliationCalculator>();
 
 var app = builder.Build();
 

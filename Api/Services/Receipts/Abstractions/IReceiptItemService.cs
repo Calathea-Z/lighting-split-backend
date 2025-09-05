@@ -1,7 +1,7 @@
 ﻿using Api.Dtos.Receipts.Requests.Items;
 using Api.Dtos.Receipts.Responses.Items;
 
-namespace Api.Interfaces
+namespace Api.Services.Receipts.Abstractions
 {
     public interface IReceiptItemsService
     {
