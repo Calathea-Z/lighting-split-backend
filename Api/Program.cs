@@ -7,85 +7,93 @@ using Azure.Storage.Blobs;
 using Azure.Storage.Queues;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
+var cfg = builder.Configuration;
+var env = builder.Environment;
 
-builder.Services.Configure<StorageOptions>(
-    builder.Configuration.GetSection("Storage"));
+// ---------- Options (typed + validated) ----------
+builder.Services
+    .AddOptions<StorageOptions>().Bind(cfg.GetSection("Storage"))
+    .ValidateDataAnnotations().ValidateOnStart();
 
-// EF Core + PostgreSQL
+builder.Services
+    .AddOptions<UploadOptions>().Bind(cfg.GetSection("Upload"))
+    .ValidateDataAnnotations().ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<UploadOptions>, UploadOptionsValidator>();
+
+
+// ---------- EF Core: PostgreSQL ----------
 builder.Services.AddDbContext<LightningDbContext>(opts =>
-    opts.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+    opts.UseNpgsql(cfg.GetConnectionString("Default")));
 
-// Controllers
+// ---------- MVC ----------
 builder.Services.AddControllers();
+builder.Services.AddProblemDetails();
 
-// CORS
-const string CorsPolicy = "NextDev";
+// ---------- CORS ----------
+const string CorsPolicy = "UiDev";
 builder.Services.AddCors(opt =>
 {
-    opt.AddPolicy(CorsPolicy, p =>
-        p.WithOrigins("http://localhost:3000") // frontend dev URL
-         .AllowAnyHeader()
-         .AllowAnyMethod());
+    var origins = cfg.GetSection("Cors:Origins").Get<string[]>() ?? new[] { "http://localhost:3000" };
+    opt.AddPolicy(CorsPolicy, p => p
+        .WithOrigins(origins)
+        .AllowAnyHeader()
+        .AllowAnyMethod());
 });
 
-// Swagger
+// ---------- Swagger ----------
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.Configure<UploadOptions>(opts =>
-{
-    opts.RootFolder = "uploads";
-    opts.PublicRequestPath = "/uploads";
-    opts.MaxBytes = 10 * 1024 * 1024;
-});
+// ---------- Azure Storage (Blob + Queue) ----------
+string? storageConn =
+    cfg.GetConnectionString("AzureStorage")
+    ?? cfg["AzureStorage:ConnectionString"]
+    ?? (env.IsDevelopment() ? "UseDevelopmentStorage=true" : null);
 
-var cfg = builder.Configuration;
-
-// Handle Azure Storage connection string safely
-var connectionString = cfg["AzureStorage:ConnectionString"];
-if (!string.IsNullOrEmpty(connectionString))
+if (!string.IsNullOrWhiteSpace(storageConn))
 {
-    builder.Services.AddSingleton(new BlobServiceClient(connectionString));
-    builder.Services.AddSingleton(new QueueServiceClient(connectionString));
-    builder.Services.AddSingleton<IParseQueue, AzureStorageParseQueue>();
-}
-else
-{
-    // Use development storage if no connection string is provided
-    var devConnectionString = "UseDevelopmentStorage=true";
-    builder.Services.AddSingleton(new BlobServiceClient(devConnectionString));
-    builder.Services.AddSingleton(new QueueServiceClient(devConnectionString));
+    builder.Services.AddSingleton(new BlobServiceClient(storageConn));
+    builder.Services.AddSingleton(new QueueServiceClient(storageConn));
     builder.Services.AddSingleton<IParseQueue, AzureStorageParseQueue>();
 }
 
+// ---------- App Services ----------
 builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
 builder.Services.AddScoped<IReceiptService, ReceiptService>();
+builder.Services.AddScoped<IReconciliationService, ReconciliationService>();
 
 var app = builder.Build();
 
-// Serve /uploads from ContentRoot/uploads
-var uploadsAbs = Path.Combine(app.Environment.ContentRootPath, "uploads");
+// ---------- Middleware pipeline ----------
+if (env.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+else
+{
+    app.UseExceptionHandler();   // maps to ProblemDetails
+    app.UseHsts();
+}
+
+app.UseHttpsRedirection();
+
+app.UseCors(CorsPolicy);
+
+app.MapControllers();
+
+// ---------- Static files (/uploads) ----------
+var uploadOpts = app.Services.GetRequiredService<IOptions<UploadOptions>>().Value;
+var uploadsAbs = Path.Combine(env.ContentRootPath, uploadOpts.RootFolder ?? "uploads");
 Directory.CreateDirectory(uploadsAbs);
+
 app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = new PhysicalFileProvider(uploadsAbs),
-    RequestPath = "/uploads"
+    RequestPath = uploadOpts.PublicRequestPath ?? "/uploads"
 });
-
-// Enable Swagger UI
-app.UseSwagger();
-app.UseSwaggerUI();
-
-// Enable CORS
-app.UseCors(CorsPolicy);
-
-// Map controllers
-app.MapControllers();
-
-// Health + root
-app.MapGet("/", () => "Lightning Split API");
-app.MapGet("/healthz", () => Results.Ok(new { ok = true }));
 
 app.Run();

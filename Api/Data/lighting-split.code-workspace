@@ -7,5 +7,7 @@
 			"path": "../../../../../../AppData/Roaming/Microsoft/UserSecrets/4289a791-b729-4c11-a6ae-13652ffc38a2"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"dotnet.defaultSolution": "lighting-split/lightning-split.sln"
+	}
 }
