@@ -4,6 +4,7 @@ using Api.Dtos.Receipts.Responses;
 using Api.Dtos.Receipts.Responses.Items;
 using Api.Services.Receipts.Abstractions;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace Api.Controllers;
 
@@ -60,15 +61,26 @@ public sealed class ReceiptsController(IReceiptService receiptService) : Control
     [HttpPost("upload")]
     [RequestSizeLimit(20_000_000)]
     [Consumes("multipart/form-data")]
-    public async Task<ActionResult<ReceiptSummaryDto>> Upload([FromForm] UploadReceiptItemDto form, CancellationToken ct = default)
+    public async Task<ActionResult<ReceiptSummaryDto>> Upload(
+        [FromForm] UploadReceiptItemDto form,
+        [FromHeader(Name = "Idempotency-Key")] string? idemKey,
+        CancellationToken ct = default)
     {
         try
         {
-            var dto = await receiptService.UploadAsync(form, ct);
-            return CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto);
+            var dto = await receiptService.UploadAsync(form, idemKey, ct);
+
+            return CreatedAtAction(
+                nameof(GetById),
+                new { id = dto.Id },
+                dto);
         }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
+
 
     // PATCH /api/receipts/{id}/totals
     [HttpPatch("{id:guid}/totals")]

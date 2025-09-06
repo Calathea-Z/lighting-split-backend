@@ -3,15 +3,15 @@ using System.ComponentModel.DataAnnotations;
 namespace Api.Dtos.Receipts.Requests;
 
 public sealed record UpdateTotalsDto(
-    [property: Range(0, 999_999_999.99)] decimal? SubTotal,
-    [property: Range(0, 999_999_999.99)] decimal? Tax,
-    [property: Range(0, 999_999_999.99)] decimal? Tip,
-    [property: Range(0, 999_999_999.99)] decimal? Total
+    [param: Range(0, 999_999_999.99)] decimal? SubTotal,
+    [param: Range(0, 999_999_999.99)] decimal? Tax,
+    [param: Range(0, 999_999_999.99)] decimal? Tip,
+    [param: Range(0, 999_999_999.99)] decimal? Total
 ) : IValidatableObject
 {
     public IEnumerable<ValidationResult> Validate(ValidationContext _)
     {
-        // Money scale guards (? 2 decimals)
+        // Money scale guards (? up to 2 decimals)
         if (SubTotal is { } s && !HasMaxScale(s, 2)) yield return VR("SubTotal supports up to 2 decimal places.", nameof(SubTotal));
         if (Tax is { } t && !HasMaxScale(t, 2)) yield return VR("Tax supports up to 2 decimal places.", nameof(Tax));
         if (Tip is { } p && !HasMaxScale(p, 2)) yield return VR("Tip supports up to 2 decimal places.", nameof(Tip));

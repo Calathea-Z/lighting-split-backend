@@ -12,7 +12,7 @@ public interface IReceiptService
     Task<bool> DeleteAsync(Guid id, CancellationToken ct = default);
     Task<ReceiptSummaryDto?> UpdateTotalsAsync(Guid id, UpdateTotalsDto dto, CancellationToken ct = default);
     Task<bool> MarkParseFailedAsync(Guid id, string error, CancellationToken ct = default);
-    Task<ReceiptSummaryDto> UploadAsync(UploadReceiptItemDto dto, CancellationToken ct = default);
+    Task<ReceiptSummaryDto> UploadAsync(UploadReceiptItemDto dto, string? idempotencyKey, CancellationToken ct = default);
     Task<ReceiptSummaryDto?> UpdateRawTextAsync(Guid id, UpdateRawTextDto dto, CancellationToken ct = default);
     Task<ReceiptSummaryDto?> UpdateStatusAsync(Guid id, UpdateStatusDto dto, CancellationToken ct = default);
     Task<ReceiptSummaryDto?> UpdateReviewAsync(Guid id, UpdateReviewDto dto, CancellationToken ct = default);

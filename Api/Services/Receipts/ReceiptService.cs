@@ -12,6 +12,7 @@ using Api.Services.Receipts.Abstractions;
 using Azure.Storage.Blobs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace Api.Services.Receipts;
 
@@ -162,10 +163,16 @@ public sealed class ReceiptService(
             .Select(r => new { r.SubTotal, r.Tax, r.Tip, r.Total })
             .FirstAsync(ct);
 
-        var sub = dto.SubTotal ?? current.SubTotal ?? (agg == null ? null : (decimal?)agg.Sub);
-        var tax = dto.Tax ?? current.Tax ?? (agg == null || agg.Tax == 0m ? null : (decimal?)agg.Tax);
-        var tip = dto.Tip ?? current.Tip;
-        var tot = dto.Total ?? current.Total ?? ((sub ?? 0m) + (tax ?? 0m) + (tip ?? 0m));
+        decimal? sub = dto.SubTotal ?? current.SubTotal ?? (agg == null ? null : (decimal?)agg.Sub);
+        decimal? tax = dto.Tax ?? current.Tax ?? (agg == null || agg.Tax == 0m ? null : (decimal?)agg.Tax);
+        decimal? tip = dto.Tip ?? current.Tip;
+        decimal? tot = dto.Total ?? current.Total ?? ((sub ?? 0m) + (tax ?? 0m) + (tip ?? 0m));
+
+        // Round to 2dp consistently to avoid epsilon mismatches
+        sub = sub is null ? null : Money.Round2(sub.Value);
+        tax = tax is null ? null : Money.Round2(tax.Value);
+        tip = tip is null ? null : Money.Round2(tip.Value);
+        tot = tot is null ? null : Money.Round2(tot.Value);
 
         await db.Receipts
             .Where(r => r.Id == id)
@@ -189,7 +196,10 @@ public sealed class ReceiptService(
             .FirstAsync(ct);
     }
 
-    public async Task<ReceiptSummaryDto> UploadAsync(UploadReceiptItemDto dto, CancellationToken ct = default)
+    public async Task<ReceiptSummaryDto> UploadAsync(
+        UploadReceiptItemDto dto,
+        string? idempotencyKey,
+        CancellationToken ct = default)
     {
         var file = dto.File;
         if (file is null || file.Length == 0)
@@ -197,19 +207,47 @@ public sealed class ReceiptService(
         if (file.Length > 20_000_000)
             throw new ArgumentException("File too large (>20MB).");
 
+        // --- Idempotency pre-read (global while OwnerUserId is null) ---
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            var existing = await db.Receipts
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r => r.IdempotencyKey == idempotencyKey, ct);
+
+            if (existing is not null)
+                return existing.ToSummaryDto();
+        }
+
+        var now = clock.UtcNow;
+
         var receipt = new Receipt
         {
             Id = Guid.NewGuid(),
-            CreatedAt = clock.UtcNow,
-            UpdatedAt = clock.UtcNow,
-            OwnerUserId = null,
+            CreatedAt = now,
+            UpdatedAt = now,
+            OwnerUserId = null, // TODO: set when auth lands
             Status = ReceiptStatus.PendingParse,
-            Items = []
+            Items = [],
+            IdempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey
         };
 
         db.Receipts.Add(receipt);
-        await db.SaveChangesAsync(ct);
 
+        try
+        {
+            // Reserve the unique (IdempotencyKey) early to win races
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // Another request with the same key won; return that one
+            var winner = await db.Receipts.AsNoTracking()
+                .FirstAsync(r => r.IdempotencyKey == idempotencyKey, ct);
+
+            return winner.ToSummaryDto();
+        }
+
+        // --- Blob upload ---
         var containerName = _storage.ReceiptsContainer ?? "receipts";
         var container = blobSvc.GetBlobContainerClient(containerName);
         await container.CreateIfNotExistsAsync(cancellationToken: ct);
@@ -229,7 +267,7 @@ public sealed class ReceiptService(
         var metadata = new Dictionary<string, string>
         {
             ["receiptId"] = receipt.Id.ToString(),
-            ["uploadedAt"] = clock.UtcNow.ToString("o"),
+            ["uploadedAt"] = now.ToString("o"),
             ["storeName"] = dto.StoreName ?? string.Empty,
             ["purchasedAt"] = dto.PurchasedAt?.ToString("o") ?? string.Empty,
             ["notes"] = dto.Notes ?? string.Empty
@@ -258,7 +296,7 @@ public sealed class ReceiptService(
 
         await db.SaveChangesAsync(ct);
 
-        // Do NOT reconcile here — keep "PendingParse" until the parser populates data
+        // Keep "PendingParse"; parser will update later
         await parseQueue.EnqueueAsync(new(containerName, blobName, receipt.Id.ToString()), ct);
 
         return receipt.ToSummaryDto();
@@ -328,5 +366,16 @@ public sealed class ReceiptService(
             .Where(x => x.Id == id)
             .Select(r => r.ToSummaryDto())
             .FirstAsync(ct);
+    }
+
+    // Helpers
+    private static bool IsUniqueViolation(DbUpdateException ex)
+    {
+        // Npgsql: SQLSTATE 23505 = unique_violation
+        if (ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation)
+            return true;
+
+        // Fallback: message contains 'duplicate key'
+        return ex.InnerException?.Message?.IndexOf("duplicate key", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 }

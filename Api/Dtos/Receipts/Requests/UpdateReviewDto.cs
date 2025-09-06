@@ -4,7 +4,7 @@ namespace Api.Dtos.Receipts.Requests;
 
 public sealed record UpdateReviewDto(
     bool NeedsReview,
-    [property: MaxLength(2000)] string? Reason
+    [param: MaxLength(2000)] string? Reason
 ) : IValidatableObject
 {
     public IEnumerable<ValidationResult> Validate(ValidationContext _)

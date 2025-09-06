@@ -29,6 +29,15 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             e.HasIndex(x => new { x.Status, x.CreatedAt });
             e.HasIndex(x => new { x.OwnerUserId, x.CreatedAt });
 
+            // Idempotency (unique per owner; nullable allowed)
+            e.Property(x => x.IdempotencyKey).HasMaxLength(64);
+            e.HasIndex(x => new { x.OwnerUserId, x.IdempotencyKey })
+             .IsUnique()
+             .HasFilter("\"IdempotencyKey\" IS NOT NULL"); // Postgres
+
+            // Fast blob lookups (non-unique; helps dedupe/debug)
+            e.HasIndex(x => new { x.BlobContainer, x.BlobName });
+
             // Strings
             e.Property(x => x.OriginalFileUrl).HasMaxLength(2048);
             e.Property(x => x.BlobContainer).HasMaxLength(128);
@@ -72,6 +81,7 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             // Flags
             e.Property(x => x.NeedsReview).HasDefaultValue(false);
         });
+
 
         // =========================
         // ReceiptItem

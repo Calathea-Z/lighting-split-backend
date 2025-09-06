@@ -1,68 +1,61 @@
-using System.Diagnostics;
 using Api.Abstractions.Receipts;
 using Api.Contracts.Reconciliation;
-using Api.Options;
 using Api.Services.Reconciliation.Abstractions;
 
-public sealed class ReceiptReconciliationCalculator : IReceiptReconciliationCalculator
+namespace Api.Services.Reconciliation
 {
-    private readonly ReconciliationOptions _opt;
-
-    public ReceiptReconciliationCalculator(ReconciliationOptions? opt = null)
+    public sealed class ReceiptReconciliationCalculator : IReceiptReconciliationCalculator
     {
-        _opt = opt ?? new ReconciliationOptions();
-        Debug.Assert(_opt.Epsilon > 0);
-    }
+        private const decimal EPS = 0.02m;
 
-    public ReconcileResult Reconcile(ParsedReceipt receipt)
-    {
-        var itemsSum = Math.Round(receipt.Items.Sum(i => i.LineTotal), 2);
-        var t = receipt.Totals;
-
-        // Choose baseline + record source
-        decimal? baseline = t.Subtotal;
-        var source = BaselineSource.Subtotal;
-
-        if (baseline is null && t.Total is not null)
+        public ReconcileResult Reconcile(ParsedReceipt parsed)
         {
-            var tax = t.Tax ?? 0m;
-            var tip = t.Tip ?? 0m;
-            baseline = t.Total.Value - tax - tip;
-            source = BaselineSource.Total;
+            // 1) Always compute items sum from items only (no TotalPrice property needed)
+            var itemsSum = Round2(parsed.Items.Sum(i => i.UnitPrice * i.Qty));
+
+            // 2) Totals from header (may be null)
+            var s = parsed.Totals.Subtotal;
+            var tax = parsed.Totals.Tax ?? 0m;
+            var tip = parsed.Totals.Tip ?? 0m;
+            var t = parsed.Totals.Total;
+
+            // 3) If printed totals balance, trust Subtotal as the baseline
+            var totalsBalance =
+                s.HasValue && t.HasValue &&
+                Math.Abs((s.Value + tax + tip) - t.Value) <= EPS;
+
+            if (totalsBalance)
+            {
+                var discrepancy = Round2(itemsSum - s!.Value);
+                var needsReview = Math.Abs(discrepancy) > EPS;
+
+                return new ReconcileResult(
+                    Status: needsReview ? ParseStatus.Partial : ParseStatus.Success,
+                    ItemsSum: itemsSum,
+                    BaselineSubtotal: s.Value,
+                    Discrepancy: discrepancy,
+                    NeedsAdjustment: needsReview,
+                    Reason: needsReview ? "Items do not add to provided subtotal." : null,
+                    Source: BaselineSource.Subtotal
+                );
+            }
+
+            // 4) Fallback when totals don't balance
+            var baseline = s ?? t ?? 0m;
+            var fallbackDiscrepancy = Round2(itemsSum - baseline);
+
+            return new ReconcileResult(
+                Status: ParseStatus.Failed,
+                ItemsSum: itemsSum,
+                BaselineSubtotal: baseline,
+                Discrepancy: fallbackDiscrepancy,
+                NeedsAdjustment: true,
+                Reason: "Grand total mismatch outside ε.",
+                Source: s.HasValue ? BaselineSource.Subtotal : BaselineSource.Total
+            );
         }
 
-        if (baseline is null)
-        {
-            baseline = itemsSum;
-            source = BaselineSource.Items;
-        }
-
-        baseline = Math.Round(baseline.Value, 2);
-
-        var discrepancy = Math.Round(itemsSum - baseline.Value, 2);
-        var withinEps = Math.Abs(discrepancy) <= _opt.Epsilon;
-
-        // Optional grand total consistency check (only if parts exist)
-        var totalConsistent = true;
-        if (t.Total is not null && t.Subtotal is not null)
-        {
-            var composed = (t.Subtotal ?? 0m) + (t.Tax ?? 0m) + (t.Tip ?? 0m);
-            totalConsistent = Math.Abs(Math.Round(composed - t.Total.Value, 2)) <= _opt.Epsilon;
-        }
-
-        // Map to your ParseStatus enum (Success / Partial / Failed)
-        var status = (withinEps && totalConsistent) ? ParseStatus.Success : ParseStatus.Partial;
-
-        return new ReconcileResult(
-            Status: status,
-            ItemsSum: itemsSum,
-            BaselineSubtotal: baseline.Value,
-            Discrepancy: discrepancy,
-            NeedsAdjustment: !withinEps,
-            Reason: withinEps
-                ? (totalConsistent ? null : "Grand total mismatch outside ε.")
-                : $"Items vs baseline subtotal differ by {discrepancy:0.00}.",
-            Source: source
-        );
+        private static decimal Round2(decimal d) =>
+            Math.Round(d, 2, MidpointRounding.AwayFromZero);
     }
 }

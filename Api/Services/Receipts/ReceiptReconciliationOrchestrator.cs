@@ -18,41 +18,70 @@ namespace Api.Services.Receipts
     {
         public async Task ReconcileAsync(Guid receiptId, CancellationToken ct = default)
         {
-            // 1) make sure header matches current items (SQL aggregate)
-            await RecomputeHeaderAsync(receiptId, ct);
-
-            // 2) load receipt + items for reconciliation
+            // 1) Load receipt + items (preserve OCR totals)
             var r = await db.Receipts
                 .Include(x => x.Items)
                 .FirstAsync(x => x.Id == receiptId, ct);
 
+            var isMidParse = r.Status == ReceiptStatus.PendingParse;
+
+            // 2) Reconcile using current items + printed totals
             var parsed = BuildParsedReceipt(r);
             var result = reconciliation.Reconcile(parsed);
 
-            // 3) persist transparency + status
+            // 3) Persist transparency fields (always)
             r.ComputedItemsSubtotal = result.ItemsSum;
             r.BaselineSubtotal = result.BaselineSubtotal;
             r.Discrepancy = result.Discrepancy;
             r.Reason = result.Reason;
+            r.UpdatedAt = clock.UtcNow;
 
+            if (isMidParse)
+            {
+                // While parsing: keep PendingParse, do NOT create/keep adjustments
+                r.Status = ReceiptStatus.PendingParse;
+                r.NeedsReview = false;
+
+                // Remove any stale system Adjustment created by earlier runs
+                var staleAdj = r.Items
+                    .Where(x => x.IsSystemGenerated && string.Equals(x.Label, "Adjustment", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (staleAdj.Count > 0)
+                    db.ReceiptItems.RemoveRange(staleAdj);
+
+                await db.SaveChangesAsync(ct);
+                return;
+            }
+
+            // 4) After parsing is complete: set status & maintain a single system Adjustment
             r.Status = result.Status == ParseStatus.Success
                 ? ReceiptStatus.Parsed
                 : ReceiptStatus.ParsedNeedsReview;
-
             r.NeedsReview = r.Status == ReceiptStatus.ParsedNeedsReview;
-            r.UpdatedAt = clock.UtcNow;
 
-            // 4) upsert Adjustment line if needed
             await UpsertAdjustment(r, result, ct);
             await db.SaveChangesAsync(ct);
 
-            // 5) adjustment changed items → recompute header again
-            await RecomputeHeaderAsync(receiptId, ct);
+            // 5) If totals were missing, roll up from items (never overwrite valid OCR totals)
+            await RecomputeHeaderIfItemsExistAsync(receiptId, ct);
         }
 
         // --- helpers ---
-        private async Task RecomputeHeaderAsync(Guid receiptId, CancellationToken ct)
+
+        private async Task RecomputeHeaderIfItemsExistAsync(Guid receiptId, CancellationToken ct)
         {
+            // Keep OCR totals if present
+            var current = await db.Receipts.AsNoTracking()
+                .Where(r => r.Id == receiptId)
+                .Select(r => new { r.SubTotal, r.Total, r.Tax })
+                .FirstAsync(ct);
+
+            if (current.SubTotal is not null || current.Total is not null)
+                return;
+
+            var hasItems = await db.ReceiptItems.AnyAsync(x => x.ReceiptId == receiptId, ct);
+            if (!hasItems) return;
+
             var agg = await db.ReceiptItems
                 .Where(x => x.ReceiptId == receiptId)
                 .GroupBy(_ => 1)
@@ -62,20 +91,21 @@ namespace Api.Services.Receipts
                     Tax = g.Sum(x => x.Tax ?? 0m),
                     Tot = g.Sum(x => x.LineTotal)
                 })
-                .SingleOrDefaultAsync(ct);
+                .SingleAsync(ct);
 
             await db.Receipts.Where(r => r.Id == receiptId)
                 .ExecuteUpdateAsync(s => s
-                    .SetProperty(r => r.SubTotal, _ => agg == null ? (decimal?)null : Round2(agg.Sub))
-                    .SetProperty(r => r.Tax, _ => agg == null || agg.Tax == 0m ? (decimal?)null : Round2(agg.Tax))
-                    .SetProperty(r => r.Total, _ => agg == null ? (decimal?)null : Round2(agg.Tot))
+                    .SetProperty(r => r.SubTotal, _ => Round2(agg.Sub))
+                    .SetProperty(r => r.Tax, _ => agg.Tax == 0m ? (decimal?)null : Round2(agg.Tax))
+                    .SetProperty(r => r.Total, _ => Round2(agg.Tot))
                     .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
         }
 
         private static ParsedReceipt BuildParsedReceipt(Receipt r)
         {
             var items = r.Items
-                .Where(i => !i.IsSystemGenerated)
+                .Where(i => !i.IsSystemGenerated &&
+                            !string.Equals(i.Label, "Adjustment", StringComparison.OrdinalIgnoreCase))
                 .Select(i => new ParsedItem(
                     Description: i.Label ?? string.Empty,
                     Qty: (int)Math.Round(i.Qty <= 0 ? 1m : i.Qty, MidpointRounding.AwayFromZero),
@@ -93,7 +123,16 @@ namespace Api.Services.Receipts
 
         private Task UpsertAdjustment(Receipt r, ReconcileResult result, CancellationToken ct)
         {
-            var adjustment = r.Items.FirstOrDefault(x => x.IsSystemGenerated && x.Label == "Adjustment");
+            // Remove any non-system "Adjustment" stragglers
+            var rogueAdjustments = r.Items
+                .Where(x => !x.IsSystemGenerated &&
+                            string.Equals(x.Label, "Adjustment", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (rogueAdjustments.Count > 0)
+                db.ReceiptItems.RemoveRange(rogueAdjustments);
+
+            var adjustment = r.Items.FirstOrDefault(x => x.IsSystemGenerated &&
+                                                         string.Equals(x.Label, "Adjustment", StringComparison.OrdinalIgnoreCase));
 
             if (!result.NeedsAdjustment)
             {
@@ -109,6 +148,7 @@ namespace Api.Services.Receipts
                 {
                     ReceiptId = r.Id,
                     Label = "Adjustment",
+                    Notes = "Auto-reconcile",
                     IsSystemGenerated = true,
                     Qty = 1,
                     UnitPrice = delta,
@@ -121,6 +161,7 @@ namespace Api.Services.Receipts
             else
             {
                 adjustment.UnitPrice = delta;
+                adjustment.Notes = "Auto-reconcile";
                 adjustment.UpdatedAt = clock.UtcNow;
                 ReceiptItemMaps.Recalculate(adjustment);
                 db.ReceiptItems.Update(adjustment);

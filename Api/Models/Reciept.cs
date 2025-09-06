@@ -57,6 +57,8 @@ public class Receipt
 
     public bool NeedsReview { get; set; }
 
+    public string? IdempotencyKey { get; set; }
+
     // Nav
     public List<ReceiptItem> Items { get; set; } = new();
 }
