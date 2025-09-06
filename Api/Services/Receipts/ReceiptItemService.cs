@@ -6,6 +6,7 @@ using Api.Mappers;
 using Api.Models;
 using Api.Services.Receipts.Abstractions;
 using Microsoft.EntityFrameworkCore;
+using System.Text.RegularExpressions;
 
 namespace Api.Services.Receipts;
 
@@ -32,11 +33,6 @@ public sealed class ReceiptItemsService : IReceiptItemsService
         var exists = await _db.Receipts.AnyAsync(r => r.Id == receiptId, ct);
         if (!exists) return null;
 
-        // Block user-created "Adjustment" rows (system-managed)
-        var label = (dto.Label ?? string.Empty).Trim();
-        if (string.Equals(label, "Adjustment", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("The 'Adjustment' line is system-managed and cannot be created manually.");
-
         // Compute next position: if dto.Position < 1, use max+1
         var maxPos = await _db.ReceiptItems
             .Where(x => x.ReceiptId == receiptId)
@@ -45,10 +41,17 @@ public sealed class ReceiptItemsService : IReceiptItemsService
 
         int nextPos = (dto.Position >= 1) ? dto.Position : ((maxPos ?? 0) + 1);
 
+        // Normalize label by removing qty tokens that match provided qty (e.g., "Coffee 1x" → "Coffee")
+        var normalizedLabel = NormalizeLabelByQty((dto.Label ?? string.Empty).Trim(), dto.Qty);
+
+        // Block user-created "Adjustment" rows (system-managed)
+        if (string.Equals(normalizedLabel, "Adjustment", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The 'Adjustment' line is system-managed and cannot be created manually.");
+
         var item = new ReceiptItem
         {
             ReceiptId = receiptId,
-            Label = label,
+            Label = normalizedLabel,
             Unit = string.IsNullOrWhiteSpace(dto.Unit) ? null : dto.Unit.Trim(),
             Category = string.IsNullOrWhiteSpace(dto.Category) ? null : dto.Category.Trim(),
             Notes = string.IsNullOrWhiteSpace(dto.Notes) ? null : dto.Notes.Trim(),
@@ -77,17 +80,12 @@ public sealed class ReceiptItemsService : IReceiptItemsService
         return item.ToDto();
     }
 
-
     public async Task<ReceiptItemDto?> UpdateItemAsync(Guid receiptId, Guid itemId, UpdateReceiptItemDto dto, CancellationToken ct = default)
     {
         if (dto is null) throw new ArgumentNullException(nameof(dto));
 
         var item = await _db.ReceiptItems.FirstOrDefaultAsync(x => x.Id == itemId && x.ReceiptId == receiptId, ct);
         if (item is null) return null;
-
-        // Block manual edits of system "Adjustment"
-        if (item.IsSystemGenerated && item.Label == "Adjustment")
-            throw new InvalidOperationException("System-generated Adjustment cannot be modified manually.");
 
         // optimistic concurrency
         _db.Entry(item).Property(x => x.Version).OriginalValue = dto.Version;
@@ -110,6 +108,15 @@ public sealed class ReceiptItemsService : IReceiptItemsService
         item.Discount = item.Discount is null ? null : Round2(item.Discount.Value);
         item.Tax = item.Tax is null ? null : Round2(item.Tax.Value);
         item.UpdatedAt = _clock.UtcNow;
+
+        // Normalize label by removing qty tokens that match the (now-normalized) qty
+        item.Label = NormalizeLabelByQty(item.Label, item.Qty);
+
+        // Block manual edits to system "Adjustment" or attempts to rename to "Adjustment"
+        if (item.IsSystemGenerated && string.Equals(item.Label, "Adjustment", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("System-generated Adjustment cannot be modified manually.");
+        if (!item.IsSystemGenerated && string.Equals(item.Label, "Adjustment", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The 'Adjustment' line is system-managed and cannot be modified manually.");
 
         // Clamp discount ≤ line subtotal
         var maxDiscount = Round2(item.Qty * item.UnitPrice);
@@ -136,7 +143,7 @@ public sealed class ReceiptItemsService : IReceiptItemsService
         if (item is null) return false;
 
         // Block deletes of system "Adjustment"
-        if (item.IsSystemGenerated && item.Label == "Adjustment")
+        if (item.IsSystemGenerated && string.Equals(item.Label, "Adjustment", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("System-generated Adjustment cannot be deleted manually.");
 
         if (version.HasValue)
@@ -163,5 +170,40 @@ public sealed class ReceiptItemsService : IReceiptItemsService
 
     private static decimal Round2(decimal v) =>
         decimal.Round(v, 2, MidpointRounding.AwayFromZero);
+
+    // Remove leading or trailing "qty×" tokens that match the numeric qty.
+    // Examples:
+    //  "2x Bagel" (qty=2)     -> "Bagel"
+    //  "Bagel x2" (qty=2)     -> "Bagel"
+    //  "Coffee 1x" (qty=1)    -> "Coffee"
+    //  "Muffin ×2" (qty=2)    -> "Muffin"
+    private static readonly Regex QtyPrefix = new(@"^\s*(\d{1,3})\s*[x×]\s*", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex QtySuffixXn = new(@"\s*[x×]\s*(\d{1,3})\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex QtySuffixNx = new(@"\s*(\d{1,3})\s*[x×]\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static string NormalizeLabelByQty(string label, decimal qty)
+    {
+        if (string.IsNullOrWhiteSpace(label)) return string.Empty;
+
+        var t = label.Trim();
+        var q = (int)decimal.Round(qty <= 0 ? 1 : qty, 0, MidpointRounding.AwayFromZero);
+
+        // strip matching prefix "2x "
+        var mPref = QtyPrefix.Match(t);
+        if (mPref.Success && int.TryParse(mPref.Groups[1].Value, out var qp) && qp == q)
+            t = QtyPrefix.Replace(t, "");
+
+        // strip matching suffix " x2"
+        var mSufXn = QtySuffixXn.Match(t);
+        if (mSufXn.Success && int.TryParse(mSufXn.Groups[1].Value, out var qx) && qx == q)
+            t = QtySuffixXn.Replace(t, "");
+
+        // strip matching suffix " 2x"
+        var mSufNx = QtySuffixNx.Match(t);
+        if (mSufNx.Success && int.TryParse(mSufNx.Groups[1].Value, out var qn) && qn == q)
+            t = QtySuffixNx.Replace(t, "");
+
+        return t.Trim();
+    }
     #endregion
 }
