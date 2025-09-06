@@ -1,3 +1,4 @@
+using Api.Abstractions.Receipts;
 using Api.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,13 +30,13 @@ public static class TestConfiguration
     public static async Task<LightningDbContext> CreateTestDbContextWithDataAsync()
     {
         var context = CreateTestDbContext();
-        
+
         // Add some test data
         var receipts = new List<Api.Models.Receipt>
         {
-            TestHelpers.CreateTestReceipt(status: "Parsed"),
-            TestHelpers.CreateTestReceipt(status: "PendingParse"),
-            TestHelpers.CreateTestReceipt(status: "FailedParse")
+            TestHelpers.CreateTestReceipt(status: ReceiptStatus.Parsed),
+            TestHelpers.CreateTestReceipt(status: ReceiptStatus.PendingParse),
+            TestHelpers.CreateTestReceipt(status: ReceiptStatus.FailedParse)
         };
 
         context.Receipts.AddRange(receipts);

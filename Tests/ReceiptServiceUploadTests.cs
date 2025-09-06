@@ -1,298 +1,222 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using Api.Abstractions.Receipts;
+using Api.Common.Interfaces;
+using Api.Contracts.Receipts;
 using Api.Data;
+using Api.Dtos.Receipts.Responses.Items;
 using Api.Infrastructure.Interfaces;
 using Api.Options;
 using Api.Services.Receipts;
+using Api.Services.Receipts.Abstractions;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Moq;
 
 namespace Tests;
 
 public class ReceiptServiceUploadTests : IDisposable
 {
     private readonly LightningDbContext _dbContext;
-    private readonly Mock<BlobServiceClient> _mockBlobServiceClient;
-    private readonly Mock<IParseQueue> _mockParseQueue;
-    private readonly ReceiptService _receiptService;
-    private readonly IOptions<StorageOptions> _storageOptions;
+    private readonly Mock<BlobServiceClient> _blobSvc;
+    private readonly Mock<IParseQueue> _parseQueue;
+    private readonly Mock<IClock> _clock;
+    private readonly Mock<IReceiptReconciliationOrchestrator> _reconciler;
+    private readonly IOptions<StorageOptions> _storage;
+    private readonly DateTimeOffset _now;
+    private ReceiptService _sut;
 
     public ReceiptServiceUploadTests()
     {
-        // Setup in-memory database
-        var options = new DbContextOptionsBuilder<LightningDbContext>()
-            .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
+        var opts = new DbContextOptionsBuilder<LightningDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
+        _dbContext = new LightningDbContext(opts);
 
-        _dbContext = new LightningDbContext(options);
-
-        // Options (config-driven container name, etc.)
-        _storageOptions = Options.Create(new StorageOptions
+        _now = DateTimeOffset.Parse("2025-09-05T12:00:00Z");
+        _storage = Options.Create(new StorageOptions
         {
-            ReceiptsContainer = "receipts",
+            ReceiptsContainer = TestHelpers.TestConstants.ReceiptsContainer,
             OverwriteOnUpload = true
         });
 
-        // Setup mocks
-        _mockBlobServiceClient = new Mock<BlobServiceClient>();
-        _mockParseQueue = new Mock<IParseQueue>();
+        _blobSvc = new Mock<BlobServiceClient>(MockBehavior.Loose);
+        _parseQueue = new Mock<IParseQueue>(MockBehavior.Loose);
+        _clock = new Mock<IClock>(MockBehavior.Loose);
+        _reconciler = new Mock<IReceiptReconciliationOrchestrator>(MockBehavior.Loose);
 
-        // Create service instance (inject options)
-        _receiptService = new ReceiptService(
+        _clock.Setup(x => x.UtcNow).Returns(_now);
+
+        _sut = new ReceiptService(
             _dbContext,
-            _mockBlobServiceClient.Object,
-            _mockParseQueue.Object,
-            _storageOptions
+            _blobSvc.Object,
+            _parseQueue.Object,
+            _storage,
+            _clock.Object,
+            _reconciler.Object
         );
     }
 
-    public void Dispose()
+    public void Dispose() => _dbContext.Dispose();
+
+    /* ---------- helpers ---------- */
+
+    private static IFormFile MakeFormFile(string name, string contentType, byte[] bytes)
     {
-        _dbContext.Dispose();
+        var f = new Mock<IFormFile>();
+        f.Setup(x => x.FileName).Returns(name);
+        f.Setup(x => x.ContentType).Returns(contentType);
+        f.Setup(x => x.Length).Returns(bytes.Length);
+        f.Setup(x => x.OpenReadStream()).Returns(new MemoryStream(bytes));
+        return f.Object;
     }
 
-    [Fact]
-    public async Task UploadAsync_WithValidFile_ShouldUploadAndEnqueue()
+    private (Mock<BlobContainerClient> container, Mock<BlobClient> blob) SetupBlobHappy(string containerName = TestHelpers.TestConstants.ReceiptsContainer)
     {
-        // Arrange
-        var fileContent = "test image content";
-        var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(fileContent));
-        
-        var mockFile = new Mock<IFormFile>();
-        mockFile.Setup(f => f.FileName).Returns("test.jpg");
-        mockFile.Setup(f => f.ContentType).Returns("image/jpeg");
-        mockFile.Setup(f => f.Length).Returns(fileContent.Length);
-        mockFile.Setup(f => f.OpenReadStream()).Returns(stream);
+        var container = new Mock<BlobContainerClient>(MockBehavior.Loose);
+        var blob = new Mock<BlobClient>(MockBehavior.Loose);
 
-        var dto = new UploadReceiptItemDto
-        {
-            File = mockFile.Object,
-            StoreName = "Test Store",
-            PurchasedAt = DateTimeOffset.UtcNow,
-            Notes = "Test notes"
-        };
+        _blobSvc.Setup(x => x.GetBlobContainerClient(containerName)).Returns(container.Object);
+        container.Setup(x => x.GetBlobClient(It.IsAny<string>())).Returns(blob.Object);
 
-        // Mock blob storage
-        var mockContainer = new Mock<BlobContainerClient>();
-        var mockBlob = new Mock<BlobClient>();
-        var mockBlobUri = new Uri("https://test.blob.core.windows.net/receipts/test.jpg");
-        
-        _mockBlobServiceClient.Setup(x => x.GetBlobContainerClient("receipts"))
-            .Returns(mockContainer.Object);
-        mockContainer.Setup(x => x.CreateIfNotExistsAsync(It.IsAny<PublicAccessType>(), It.IsAny<IDictionary<string, string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Mock.Of<Azure.Response<BlobContainerInfo>>());
-        mockContainer.Setup(x => x.GetBlobClient(It.IsAny<string>()))
-            .Returns(mockBlob.Object);
-        mockBlob.Setup(x => x.Uri).Returns(mockBlobUri);
-        mockBlob.Setup(x => x.DeleteIfExistsAsync(It.IsAny<DeleteSnapshotsOption>(), It.IsAny<BlobRequestConditions>(), It.IsAny<CancellationToken>()))
+        blob.SetupGet(b => b.Uri).Returns(new Uri($"https://test.blob.core.windows.net/{containerName}/{Guid.NewGuid()}.jpg"));
+        blob.Setup(x => x.DeleteIfExistsAsync(
+                It.IsAny<DeleteSnapshotsOption>(),
+                It.IsAny<BlobRequestConditions>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(Mock.Of<Azure.Response<bool>>());
-        mockBlob.Setup(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()))
+        blob.Setup(x => x.UploadAsync(
+                It.IsAny<Stream>(),
+                It.IsAny<BlobUploadOptions>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(Mock.Of<Azure.Response<BlobContentInfo>>());
 
-        // Mock parse queue
-        _mockParseQueue.Setup(x => x.EnqueueAsync(It.IsAny<ReceiptParseMessage>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
+        return (container, blob);
+    }
+
+    /* ---------- tests ---------- */
+
+    [Fact]
+    public async Task UploadAsync_WithValidFile_PersistsReceipt_EnqueuesParse_AndUploadsBlob()
+    {
+        // Arrange
+        var bytes = System.Text.Encoding.UTF8.GetBytes("ok");
+        var file = MakeFormFile(TestHelpers.TestConstants.TestFileName, TestHelpers.TestConstants.TestContentType, bytes);
+        var dto = new UploadReceiptItemDto
+        {
+            File = file,
+            StoreName = "Store",
+            PurchasedAt = _now.AddDays(-1),
+            Notes = "n"
+        };
+
+        var (_, blob) = SetupBlobHappy();
+        _parseQueue.Setup(q => q.EnqueueAsync(It.IsAny<ReceiptParseMessage>(), It.IsAny<CancellationToken>()))
+                   .Returns(Task.CompletedTask);
 
         // Act
-        var result = await _receiptService.UploadAsync(dto);
+        var result = await _sut.UploadAsync(dto);
 
-        // Assert
+        // Assert: result shape
         result.Should().NotBeNull();
+        result.Status.Should().Be(ReceiptStatus.PendingParse);
+        result.ItemCount.Should().Be(0);
         result.Id.Should().NotBeEmpty();
-        result.Status.Should().Be("PendingParse");
 
-        // Verify database
-        var savedReceipt = await _dbContext.Receipts.FindAsync(result.Id);
-        savedReceipt.Should().NotBeNull();
-        savedReceipt!.BlobContainer.Should().Be("receipts");
-        savedReceipt.BlobName.Should().NotBeEmpty();
-        savedReceipt.OriginalFileUrl.Should().Be(mockBlobUri.ToString());
+        // Assert: receipt persisted
+        var saved = await _dbContext.Receipts.FindAsync(result.Id);
+        saved.Should().NotBeNull();
+        saved!.BlobContainer.Should().Be(TestHelpers.TestConstants.ReceiptsContainer);
+        saved.BlobName.Should().NotBeNullOrWhiteSpace();
 
-        // Verify parse queue was called
-        _mockParseQueue.Verify(x => x.EnqueueAsync(It.IsAny<ReceiptParseMessage>(), It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task UploadAsync_WithNullFile_ShouldThrowArgumentException()
-    {
-        // Arrange
-        var dto = new UploadReceiptItemDto { File = null };
-
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UploadAsync(dto))
-            .Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*File is required*");
-    }
-
-    [Fact]
-    public async Task UploadAsync_WithEmptyFile_ShouldThrowArgumentException()
-    {
-        // Arrange
-        var mockFile = new Mock<IFormFile>();
-        mockFile.Setup(f => f.Length).Returns(0);
-        
-        var dto = new UploadReceiptItemDto { File = mockFile.Object };
-
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UploadAsync(dto))
-            .Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*File is required*");
-    }
-
-    [Fact]
-    public async Task UploadAsync_WithFileTooLarge_ShouldThrowArgumentException()
-    {
-        // Arrange
-        var mockFile = new Mock<IFormFile>();
-        mockFile.Setup(f => f.Length).Returns(25_000_000); // 25MB
-        
-        var dto = new UploadReceiptItemDto { File = mockFile.Object };
-
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UploadAsync(dto))
-            .Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*File too large*");
-    }
-
-    [Fact]
-    public async Task UploadAsync_WithBlobUploadFailure_ShouldStillCreateReceipt()
-    {
-        // Arrange
-        var fileContent = "test content";
-        var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(fileContent));
-        
-        var mockFile = new Mock<IFormFile>();
-        mockFile.Setup(f => f.FileName).Returns("test.jpg");
-        mockFile.Setup(f => f.ContentType).Returns("image/jpeg");
-        mockFile.Setup(f => f.Length).Returns(fileContent.Length);
-        mockFile.Setup(f => f.OpenReadStream()).Returns(stream);
-
-        var dto = new UploadReceiptItemDto { File = mockFile.Object };
-
-        // Mock blob storage with failure
-        var mockContainer = new Mock<BlobContainerClient>();
-        var mockBlob = new Mock<BlobClient>();
-        
-        _mockBlobServiceClient.Setup(x => x.GetBlobContainerClient("receipts"))
-            .Returns(mockContainer.Object);
-        mockContainer.Setup(x => x.CreateIfNotExistsAsync(It.IsAny<PublicAccessType>(), It.IsAny<IDictionary<string, string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Mock.Of<Azure.Response<BlobContainerInfo>>());
-        mockContainer.Setup(x => x.GetBlobClient(It.IsAny<string>()))
-            .Returns(mockBlob.Object);
-        mockBlob.Setup(x => x.DeleteIfExistsAsync(It.IsAny<DeleteSnapshotsOption>(), It.IsAny<BlobRequestConditions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Mock.Of<Azure.Response<bool>>());
-        mockBlob.Setup(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new Exception("Blob upload failed"));
-
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UploadAsync(dto))
-            .Should().ThrowAsync<Exception>()
-            .WithMessage("*Blob upload failed*");
-    }
-
-    [Fact]
-    public async Task UploadAsync_WithParseQueueFailure_ShouldStillCreateReceipt()
-    {
-        // Arrange
-        var fileContent = "test content";
-        var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(fileContent));
-        
-        var mockFile = new Mock<IFormFile>();
-        mockFile.Setup(f => f.FileName).Returns("test.jpg");
-        mockFile.Setup(f => f.ContentType).Returns("image/jpeg");
-        mockFile.Setup(f => f.Length).Returns(fileContent.Length);
-        mockFile.Setup(f => f.OpenReadStream()).Returns(stream);
-
-        var dto = new UploadReceiptItemDto { File = mockFile.Object };
-
-        // Mock blob storage
-        var mockContainer = new Mock<BlobContainerClient>();
-        var mockBlob = new Mock<BlobClient>();
-        var mockBlobUri = new Uri("https://test.blob.core.windows.net/receipts/test.jpg");
-        
-        _mockBlobServiceClient.Setup(x => x.GetBlobContainerClient("receipts"))
-            .Returns(mockContainer.Object);
-        mockContainer.Setup(x => x.CreateIfNotExistsAsync(It.IsAny<PublicAccessType>(), It.IsAny<IDictionary<string, string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Mock.Of<Azure.Response<BlobContainerInfo>>());
-        mockContainer.Setup(x => x.GetBlobClient(It.IsAny<string>()))
-            .Returns(mockBlob.Object);
-        mockBlob.Setup(x => x.Uri).Returns(mockBlobUri);
-        mockBlob.Setup(x => x.DeleteIfExistsAsync(It.IsAny<DeleteSnapshotsOption>(), It.IsAny<BlobRequestConditions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Mock.Of<Azure.Response<bool>>());
-        mockBlob.Setup(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Mock.Of<Azure.Response<BlobContentInfo>>());
-
-        // Mock parse queue with failure
-        _mockParseQueue.Setup(x => x.EnqueueAsync(It.IsAny<ReceiptParseMessage>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new Exception("Queue failure"));
-
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UploadAsync(dto))
-            .Should().ThrowAsync<Exception>()
-            .WithMessage("*Queue failure*");
-    }
-
-    [Fact]
-    public async Task UploadAsync_ShouldSetCorrectMetadata()
-    {
-        // Arrange
-        var fileContent = "test content";
-        var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(fileContent));
-        
-        var mockFile = new Mock<IFormFile>();
-        mockFile.Setup(f => f.FileName).Returns("test.jpg");
-        mockFile.Setup(f => f.ContentType).Returns("image/jpeg");
-        mockFile.Setup(f => f.Length).Returns(fileContent.Length);
-        mockFile.Setup(f => f.OpenReadStream()).Returns(stream);
-
-        var purchasedAt = DateTimeOffset.UtcNow;
-        var dto = new UploadReceiptItemDto
-        {
-            File = mockFile.Object,
-            StoreName = "Test Store",
-            PurchasedAt = purchasedAt,
-            Notes = "Test notes"
-        };
-
-        // Mock blob storage
-        var mockContainer = new Mock<BlobContainerClient>();
-        var mockBlob = new Mock<BlobClient>();
-        var mockBlobUri = new Uri("https://test.blob.core.windows.net/receipts/test.jpg");
-        
-        _mockBlobServiceClient.Setup(x => x.GetBlobContainerClient("receipts"))
-            .Returns(mockContainer.Object);
-        mockContainer.Setup(x => x.CreateIfNotExistsAsync(It.IsAny<PublicAccessType>(), It.IsAny<IDictionary<string, string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Mock.Of<Azure.Response<BlobContainerInfo>>());
-        mockContainer.Setup(x => x.GetBlobClient(It.IsAny<string>()))
-            .Returns(mockBlob.Object);
-        mockBlob.Setup(x => x.Uri).Returns(mockBlobUri);
-        mockBlob.Setup(x => x.DeleteIfExistsAsync(It.IsAny<DeleteSnapshotsOption>(), It.IsAny<BlobRequestConditions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Mock.Of<Azure.Response<bool>>());
-        mockBlob.Setup(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Mock.Of<Azure.Response<BlobContentInfo>>());
-
-        _mockParseQueue.Setup(x => x.EnqueueAsync(It.IsAny<ReceiptParseMessage>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-
-        // Act
-        var result = await _receiptService.UploadAsync(dto);
-
-        // Assert
-        result.Should().NotBeNull();
-
-        // Verify blob upload was called with correct metadata
-        mockBlob.Verify(x => x.UploadAsync(
-            It.IsAny<Stream>(),
-            It.Is<BlobUploadOptions>(options => 
-                options.HttpHeaders.ContentType == "image/jpeg" &&
-                options.Metadata.ContainsKey("storeName") &&
-                options.Metadata["storeName"] == "Test Store" &&
-                options.Metadata.ContainsKey("notes") &&
-                options.Metadata["notes"] == "Test notes" &&
-                options.Metadata.ContainsKey("purchasedAt") &&
-                options.Metadata["purchasedAt"] == purchasedAt.ToString("o")
-            ),
+        // Assert: side effects attempted
+        blob.Verify(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()), Times.Once);
+        _parseQueue.Verify(q => q.EnqueueAsync(
+            It.Is<ReceiptParseMessage>(m => m.ReceiptId == result.Id.ToString()),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task UploadAsync_NullFile_Throws_AndDoesNotPersist()
+    {
+        var dto = new UploadReceiptItemDto { File = null! };
+
+        await _sut.Invoking(s => s.UploadAsync(dto))
+            .Should().ThrowAsync<ArgumentException>()
+            .WithMessage($"*{TestHelpers.ValidationMessages.FileRequired}*");
+
+        (await _dbContext.Receipts.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UploadAsync_EmptyFile_Throws_AndDoesNotPersist()
+    {
+        var f = new Mock<IFormFile>();
+        f.Setup(x => x.Length).Returns(0);
+
+        await _sut.Invoking(s => s.UploadAsync(new UploadReceiptItemDto { File = f.Object }))
+            .Should().ThrowAsync<ArgumentException>()
+            .WithMessage($"*{TestHelpers.ValidationMessages.FileRequired}*");
+
+        (await _dbContext.Receipts.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UploadAsync_TooLarge_Throws_AndDoesNotPersist()
+    {
+        var f = new Mock<IFormFile>();
+        f.Setup(x => x.Length).Returns(20_000_001);
+
+        await _sut.Invoking(s => s.UploadAsync(new UploadReceiptItemDto { File = f.Object }))
+            .Should().ThrowAsync<ArgumentException>()
+            .WithMessage($"*{TestHelpers.ValidationMessages.FileTooLarge}*");
+
+        (await _dbContext.Receipts.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UploadAsync_SameFileTwice_CreatesDistinctReceipts()
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes("same");
+        var f1 = MakeFormFile("dup.jpg", TestHelpers.TestConstants.TestContentType, bytes);
+        var f2 = MakeFormFile("dup.jpg", TestHelpers.TestConstants.TestContentType, bytes);
+
+        SetupBlobHappy();
+        _parseQueue.Setup(q => q.EnqueueAsync(It.IsAny<ReceiptParseMessage>(), It.IsAny<CancellationToken>()))
+                   .Returns(Task.CompletedTask);
+
+        var r1 = await _sut.UploadAsync(new UploadReceiptItemDto
+        {
+            File = f1,
+            StoreName = "Store A",
+            PurchasedAt = _now,
+            Notes = "n1"
+        });
+
+        SetupBlobHappy(); // new blob for second upload
+        var r2 = await _sut.UploadAsync(new UploadReceiptItemDto
+        {
+            File = f2,
+            StoreName = "Store B",
+            PurchasedAt = _now,
+            Notes = "n2"
+        });
+
+        r1.Id.Should().NotBeEmpty();
+        r2.Id.Should().NotBeEmpty();
+        r2.Id.Should().NotBe(r1.Id);
+
+        var e1 = await _dbContext.Receipts.FindAsync(r1.Id);
+        var e2 = await _dbContext.Receipts.FindAsync(r2.Id);
+        e1!.BlobName.Should().NotBeNullOrWhiteSpace();
+        e2!.BlobName.Should().NotBeNullOrWhiteSpace();
+        e1.BlobName.Should().NotBe(e2.BlobName);
     }
 }

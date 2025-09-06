@@ -1,3 +1,4 @@
+using Api.Abstractions.Receipts;
 using Api.Dtos.Receipts.Requests;
 using Api.Dtos.Receipts.Requests.Items;
 using Api.Models;
@@ -48,13 +49,13 @@ public static class TestHelpers
         };
     }
 
-    public static Receipt CreateTestReceipt(Guid? id = null, string? status = null)
+    public static Receipt CreateTestReceipt(Guid? id = null, ReceiptStatus? status = null)
     {
         return new Receipt
         {
             Id = id ?? Guid.NewGuid(),
-            Status = status ?? "Parsed",
-            OwnerUserId = "test-user",
+            Status = status ?? ReceiptStatus.Parsed,
+            OwnerUserId = TestConstants.TestUser,
             SubTotal = 25.00m,
             Tax = 2.50m,
             Tip = 5.00m,
@@ -66,7 +67,7 @@ public static class TestHelpers
                 new()
                 {
                     Id = Guid.NewGuid(),
-                    Label = "Test Item",
+                    Label = TestConstants.TestItemLabel,
                     Qty = 2,
                     UnitPrice = 10.00m,
                     LineSubtotal = 20.00m,
@@ -76,7 +77,7 @@ public static class TestHelpers
                 new()
                 {
                     Id = Guid.NewGuid(),
-                    Label = "Another Item",
+                    Label = TestConstants.TestItemLabel2,
                     Qty = 1,
                     UnitPrice = 5.00m,
                     LineSubtotal = 5.00m,
@@ -93,12 +94,12 @@ public static class TestHelpers
         {
             Id = id ?? Guid.NewGuid(),
             ReceiptId = receiptId,
-            Label = "Test Item",
+            Label = TestConstants.TestItemLabel,
             Qty = 2,
             UnitPrice = 10.00m,
             Unit = "ea",
-            Category = "Test Category",
-            Notes = "Test notes",
+            Category = TestConstants.TestCategory,
+            Notes = TestConstants.TestNotes,
             Position = 0,
             LineSubtotal = 20.00m,
             Tax = 2.00m,
@@ -157,5 +158,20 @@ public static class TestHelpers
         public const string FileRequired = "File is required.";
         public const string FileTooLarge = "File too large (>20MB).";
         public const string ConcurrencyConflict = "Concurrency conflict. Reload the item and try again.";
+    }
+
+    public static class TestConstants
+    {
+        public const string ReceiptsContainer = "receipts";
+        public const string TestUserId1 = "user1";
+        public const string TestUserId2 = "user2";
+        public const string TestUser = "test-user";
+        public const string TestStoreName = "Test Store";
+        public const string TestItemLabel = "Test Item";
+        public const string TestItemLabel2 = "Another Item";
+        public const string TestCategory = "Test Category";
+        public const string TestNotes = "Test notes";
+        public const string TestFileName = "test.jpg";
+        public const string TestContentType = "image/jpeg";
     }
 }
