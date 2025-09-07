@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Api.Contracts.Receipts;
+using Api.Abstractions.Transport;
 using Api.Infrastructure.Interfaces;
 using Azure.Storage.Queues;
 

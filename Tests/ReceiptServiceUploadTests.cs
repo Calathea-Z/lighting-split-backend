@@ -1,11 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
 using Api.Abstractions.Receipts;
+using Api.Abstractions.Transport;
 using Api.Common.Interfaces;
-using Api.Contracts.Receipts;
 using Api.Data;
 using Api.Dtos.Receipts.Responses.Items;
 using Api.Infrastructure.Interfaces;
@@ -14,11 +9,9 @@ using Api.Services.Receipts;
 using Api.Services.Receipts.Abstractions;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
-using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Moq;
 
 namespace Tests;
 

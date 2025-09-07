@@ -1,4 +1,4 @@
-﻿// Api/Controllers/ReceiptItemsController.cs
+﻿using Api.Abstractions.Transport;
 using Api.Dtos.Receipts.Requests.Items;
 using Api.Services.Receipts.Abstractions;
 using Microsoft.AspNetCore.Mvc;
@@ -11,7 +11,7 @@ public sealed class ReceiptItemsController(IReceiptItemsService items) : Control
 {
     // POST /api/receipts/{receiptId}/items
     [HttpPost]
-    public async Task<IActionResult> Create(Guid receiptId, [FromBody] CreateReceiptItemDto dto, CancellationToken ct = default)
+    public async Task<IActionResult> Create(Guid receiptId, [FromBody] CreateReceiptItemRequest dto, CancellationToken ct = default)
     {
         var created = await items.AddItemAsync(receiptId, dto, ct);
         return created is null ? NotFound() : Ok(created);

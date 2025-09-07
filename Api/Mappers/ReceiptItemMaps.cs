@@ -1,4 +1,5 @@
-﻿using Api.Dtos.Receipts.Requests.Items;
+﻿using Api.Abstractions.Transport;
+using Api.Dtos.Receipts.Requests.Items;
 using Api.Dtos.Receipts.Responses.Items;
 using Api.Models;
 
@@ -27,25 +28,37 @@ public static class ReceiptItemMaps
         );
 
     // ---------- DTO -> ReceiptItem ----------
-    public static ReceiptItem ToEntity(this CreateReceiptItemDto dto, Guid receiptId)
+    public static ReceiptItem ToEntity(this CreateReceiptItemRequest dto, Guid receiptId, int? defaultPosition = null)
     {
+        // Position: use provided >=1, else fall back to caller-supplied default (or 0)
+        var pos = dto.Position is int p and >= 1 ? p : defaultPosition.GetValueOrDefault(0);
+
+        var qty = Quant.Round3(dto.Qty <= 0 ? 1m : dto.Qty);
+        var unit = Money.Round2(dto.UnitPrice);
+        decimal? disc = dto.Discount is { } d ? Money.Round2(d) : null;
+        decimal? tax = dto.Tax is { } t ? Money.Round2(t) : null;
+
         var i = new ReceiptItem
         {
             ReceiptId = receiptId,
-            Label = (dto.Label ?? "").Trim(),
+            Label = (dto.Label ?? string.Empty).Trim(),
             Unit = string.IsNullOrWhiteSpace(dto.Unit) ? null : dto.Unit.Trim(),
             Category = string.IsNullOrWhiteSpace(dto.Category) ? null : dto.Category.Trim(),
             Notes = string.IsNullOrWhiteSpace(dto.Notes) ? null : dto.Notes.Trim(),
-            Position = dto.Position,
-            Qty = Quant.Round3(dto.Qty <= 0 ? 1m : dto.Qty),
-            UnitPrice = Money.Round2(dto.UnitPrice),
-            Discount = Money.Round2(dto.Discount),
-            Tax = Money.Round2(dto.Tax),
+            Position = pos,
+            Qty = qty,
+            UnitPrice = unit,
+            Discount = disc,
+            Tax = tax,
+            IsSystemGenerated = false,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
-        Recalculate(i);
+        var maxDiscount = Money.Round2(i.Qty * i.UnitPrice);
+        if (i.Discount is > 0m && i.Discount > maxDiscount) i.Discount = maxDiscount;
+
+        ReceiptItemMaps.Recalculate(i);
         return i;
     }
 

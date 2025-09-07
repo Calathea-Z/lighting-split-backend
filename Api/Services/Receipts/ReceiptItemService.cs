@@ -1,4 +1,5 @@
-﻿using Api.Common.Interfaces;
+﻿using Api.Abstractions.Transport;
+using Api.Common.Interfaces;
 using Api.Data;
 using Api.Dtos.Receipts.Requests.Items;
 using Api.Dtos.Receipts.Responses.Items;
@@ -26,7 +27,7 @@ public sealed class ReceiptItemsService : IReceiptItemsService
         _reconciler = reconciler;
     }
 
-    public async Task<ReceiptItemDto?> AddItemAsync(Guid receiptId, CreateReceiptItemDto dto, CancellationToken ct = default)
+    public async Task<ReceiptItemDto?> AddItemAsync(Guid receiptId, CreateReceiptItemRequest dto, CancellationToken ct = default)
     {
         if (dto is null) throw new ArgumentNullException(nameof(dto));
 
@@ -45,7 +46,7 @@ public sealed class ReceiptItemsService : IReceiptItemsService
             .Select(x => (int?)x.Position)
             .MaxAsync(ct);
 
-        int nextPos = (dto.Position >= 1) ? dto.Position : ((maxPos ?? 0) + 1);
+        int nextPos = dto.Position is int p and >= 1 ? p : (maxPos ?? 0) + 1;
 
         // Normalize label by removing qty tokens that match provided qty (e.g., "Coffee 1x" → "Coffee")
         var normalizedLabel = NormalizeLabelByQty((dto.Label ?? string.Empty).Trim(), dto.Qty);

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Api.Abstractions.Transport;
 using Api.Dtos.Receipts.Requests.Items;
 
 namespace Api.Dtos.Receipts.Requests;
@@ -7,7 +8,7 @@ public sealed class CreateReceiptDto : IValidatableObject
 {
     // Require at least one item
     [Required, MinLength(1)]
-    public List<CreateReceiptItemDto> Items { get; set; } = new();
+    public List<CreateReceiptItemRequest> Items { get; set; } = new();
 
     // Header totals (optional) — must be >= 0 when provided
     [Range(0, 999_999_999.99)] public decimal? SubTotal { get; set; }

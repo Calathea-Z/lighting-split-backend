@@ -1,17 +1,24 @@
-1# Api.Abstractions
+# Api.Abstractions (Shared NuGet)
 
-Shared primitives for the **Lighting Split backend**.  
-This package holds simple enums and value types that need to be consistent across multiple apps (e.g., Web API and Azure Functions).
+Minimal shared contracts/helpers used by **Functions** and **API**.
 
 ## Contents
-- **Receipts**
-  - `ReceiptStatus` – life cycle states of a receipt (PendingParse, Parsed, NeedsReview, FailedParse).
-  - `BaselineSource` – indicates which subtotal/total baseline was used during reconciliation.
-- **Parsing**
-  - `ParseStatus` – result of a parsing attempt (Success, Partial, Failed).
 
-## Usage
-Reference this package in your project:
+- `Receipts/` â€” core enums (ReceiptStatus, ParseStatus, etc.)
+- `Reconciliation/`
+  - `ReconcileOptions` caps & toggles
+  - `ReconcilePolicy` â†’ `CanAutoAdjust(...)`
+  - `ReconcileConstants` â†’ labels/notes
+- `Parsing/`
+  - `IgnorePhrases` shared vocabulary for non-items
+  - `NormalizerHints` (optional DTO for LLM)
+- `Transport/`
+  - `ReplaceReceiptItemDto`, `ReplaceReceiptItemsRequest` (replace-mode endpoint)
+- `Math/`
+  - `Money.Round2`, `Money.EqualsWithin`
 
-```powershell
-dotnet add package Calathea.Api.Abstractions --version 0.1.x
+## Guidelines
+
+- No EF/Azure/HTTP/DI/logging dependencies.
+- Only stable contracts & pure helpers.
+- Version with semver; bump **minor** when adding, **major** on breaking changes.

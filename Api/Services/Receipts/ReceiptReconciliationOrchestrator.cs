@@ -87,7 +87,7 @@ namespace Api.Services.Receipts
             await RecomputeHeaderIfItemsExistAsync(receiptId, ct);
         }
 
-        // --- helpers ---
+        #region Helpers
 
         private async Task RecomputeHeaderIfItemsExistAsync(Guid receiptId, CancellationToken ct)
         {
@@ -196,4 +196,6 @@ namespace Api.Services.Receipts
         private static decimal Round2(decimal v) =>
             decimal.Round(v, 2, MidpointRounding.AwayFromZero);
     }
+
+    #endregion
 }

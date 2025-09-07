@@ -1,4 +1,4 @@
-using Api.Contracts.Receipts;
+using Api.Abstractions.Transport;
 
 namespace Api.Infrastructure.Interfaces;
 

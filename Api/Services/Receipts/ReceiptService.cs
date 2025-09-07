@@ -1,4 +1,5 @@
 using Api.Abstractions.Receipts;
+using Api.Abstractions.Transport;
 using Api.Common.Interfaces;
 using Api.Data;
 using Api.Dtos.Receipts.Requests;
@@ -145,7 +146,7 @@ public sealed class ReceiptService(
         return true;
     }
 
-    public async Task<ReceiptSummaryDto?> UpdateTotalsAsync(Guid id, UpdateTotalsDto dto, CancellationToken ct = default)
+    public async Task<ReceiptSummaryDto?> UpdateTotalsAsync(Guid id, UpdateTotalsRequest dto, CancellationToken ct = default)
     {
         var exists = await db.Receipts.AnyAsync(x => x.Id == id, ct);
         if (!exists) return null;
@@ -327,7 +328,7 @@ public sealed class ReceiptService(
         return rows > 0;
     }
 
-    public async Task<ReceiptSummaryDto?> UpdateRawTextAsync(Guid id, UpdateRawTextDto dto, CancellationToken ct = default)
+    public async Task<ReceiptSummaryDto?> UpdateRawTextAsync(Guid id, UpdateRawTextRequest dto, CancellationToken ct = default)
     {
         var trimmed = dto.RawText?.Trim();
 
@@ -345,7 +346,7 @@ public sealed class ReceiptService(
             .FirstAsync(ct);
     }
 
-    public async Task<ReceiptSummaryDto?> UpdateStatusAsync(Guid id, UpdateStatusDto dto, CancellationToken ct = default)
+    public async Task<ReceiptSummaryDto?> UpdateStatusAsync(Guid id, UpdateStatusRequest dto, CancellationToken ct = default)
     {
         var rows = await db.Receipts
             .Where(r => r.Id == id)

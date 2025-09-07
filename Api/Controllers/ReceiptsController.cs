@@ -1,4 +1,5 @@
 // Api/Controllers/ReceiptsController.cs
+using Api.Abstractions.Transport;
 using Api.Dtos.Receipts.Requests;
 using Api.Dtos.Receipts.Responses;
 using Api.Dtos.Receipts.Responses.Items;
@@ -85,7 +86,7 @@ public sealed class ReceiptsController(IReceiptService receiptService) : Control
     // PATCH /api/receipts/{id}/totals
     [HttpPatch("{id:guid}/totals")]
     [Consumes("application/json")]
-    public async Task<ActionResult<ReceiptSummaryDto>> UpdateTotals([FromRoute] Guid id, [FromBody] UpdateTotalsDto dto, CancellationToken ct = default)
+    public async Task<ActionResult<ReceiptSummaryDto>> UpdateTotals([FromRoute] Guid id, [FromBody] UpdateTotalsRequest dto, CancellationToken ct = default)
     {
         var result = await receiptService.UpdateTotalsAsync(id, dto, ct);
         return result is null ? NotFound() : Ok(result);
@@ -94,7 +95,7 @@ public sealed class ReceiptsController(IReceiptService receiptService) : Control
     // PATCH /api/receipts/{id}/rawtext
     [HttpPatch("{id:guid}/rawtext")]
     [Consumes("application/json")]
-    public async Task<ActionResult<ReceiptSummaryDto>> UpdateRawText([FromRoute] Guid id, [FromBody] UpdateRawTextDto dto, CancellationToken ct = default)
+    public async Task<ActionResult<ReceiptSummaryDto>> UpdateRawText([FromRoute] Guid id, [FromBody] UpdateRawTextRequest dto, CancellationToken ct = default)
     {
         var result = await receiptService.UpdateRawTextAsync(id, dto, ct);
         return result is null ? NotFound() : Ok(result);
@@ -103,7 +104,7 @@ public sealed class ReceiptsController(IReceiptService receiptService) : Control
     // PATCH /api/receipts/{id}/status
     [HttpPatch("{id:guid}/status")]
     [Consumes("application/json")]
-    public async Task<ActionResult<ReceiptSummaryDto>> UpdateStatus([FromRoute] Guid id, [FromBody] UpdateStatusDto dto, CancellationToken ct = default)
+    public async Task<ActionResult<ReceiptSummaryDto>> UpdateStatus([FromRoute] Guid id, [FromBody] UpdateStatusRequest dto, CancellationToken ct = default)
     {
         var result = await receiptService.UpdateStatusAsync(id, dto, ct);
         return result is null ? NotFound() : Ok(result);

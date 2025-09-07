@@ -64,6 +64,24 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
              .HasMaxLength(64)
              .IsRequired();
 
+            // ===== Parse meta (new) =====
+            e.Property(x => x.ParsedBy)
+             .HasConversion<string>()       // store enum as text
+             .HasMaxLength(32);
+
+            e.Property(x => x.LlmModel).HasMaxLength(128);
+            e.Property(x => x.ParserVersion).HasMaxLength(64);
+            e.Property(x => x.RejectReason).HasMaxLength(512);
+
+            e.Property(x => x.LlmAttempted).HasDefaultValue(false);
+            e.Property(x => x.LlmAccepted).HasDefaultValue(null);
+
+            e.Property(x => x.ParsedAt)
+             .HasColumnType("timestamptz");
+
+            e.HasIndex(x => x.ParsedAt);
+            e.HasIndex(x => new { x.ParsedBy, x.ParsedAt });
+
             // Timestamps
             e.Property(x => x.CreatedAt)
              .HasColumnType("timestamptz")
@@ -82,7 +100,6 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             e.Property(x => x.NeedsReview).HasDefaultValue(false);
         });
 
-
         // =========================
         // ReceiptItem
         // =========================
@@ -99,7 +116,7 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             e.Property(x => x.Label).HasMaxLength(200);
             e.Property(x => x.Unit).HasMaxLength(16);
             e.Property(x => x.Category).HasMaxLength(64);
-            e.Property(x => x.Notes).HasMaxLength(1000); 
+            e.Property(x => x.Notes).HasMaxLength(1000);
 
             // Ordering + lookup
             e.HasIndex(x => new { x.ReceiptId, x.Position });
