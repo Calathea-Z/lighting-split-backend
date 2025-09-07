@@ -347,11 +347,39 @@ public sealed class ReceiptService(
 
     public async Task<ReceiptSummaryDto?> UpdateStatusAsync(Guid id, UpdateStatusRequest dto, CancellationToken ct = default)
     {
-        var rows = await db.Receipts
-            .Where(r => r.Id == id)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(r => r.Status, _ => dto.Status)
-                .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
+        int rows;
+
+        if (dto.Status == ReceiptStatus.Parsed)
+        {
+            // Upgrade: trust the result and clear review flags/noise
+            rows = await db.Receipts
+                .Where(r => r.Id == id)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(r => r.Status, _ => dto.Status)
+                    .SetProperty(r => r.NeedsReview, _ => false)
+                    .SetProperty(r => r.Reason, _ => null)
+                    .SetProperty(r => r.Discrepancy, _ => null)
+                    .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
+        }
+        else if (dto.Status == ReceiptStatus.ParsedNeedsReview)
+        {
+            // Only this status turns review on; keep Reason/Discrepancy set by earlier steps
+            rows = await db.Receipts
+                .Where(r => r.Id == id)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(r => r.Status, _ => dto.Status)
+                    .SetProperty(r => r.NeedsReview, _ => true)
+                    .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
+        }
+        else
+        {
+            // Other statuses: just set status + timestamp
+            rows = await db.Receipts
+                .Where(r => r.Id == id)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(r => r.Status, _ => dto.Status)
+                    .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
+        }
 
         if (rows == 0) return null;
 
@@ -360,6 +388,8 @@ public sealed class ReceiptService(
             .Select(r => r.ToSummaryDto())
             .FirstAsync(ct);
     }
+
+
 
     public async Task<ReceiptSummaryDto?> UpdateReviewAsync(Guid id, UpdateReviewDto dto, CancellationToken ct = default)
     {
