@@ -122,7 +122,7 @@ public class ReceiptServiceUploadTests : IDisposable
                    .Returns(Task.CompletedTask);
 
         // Act
-        var result = await _sut.UploadAsync(dto);
+        var result = await _sut.UploadAsync(dto, null);
 
         // Assert: result shape
         result.Should().NotBeNull();
@@ -148,7 +148,7 @@ public class ReceiptServiceUploadTests : IDisposable
     {
         var dto = new UploadReceiptItemDto { File = null! };
 
-        await _sut.Invoking(s => s.UploadAsync(dto))
+        await _sut.Invoking(s => s.UploadAsync(dto, null))
             .Should().ThrowAsync<ArgumentException>()
             .WithMessage($"*{TestHelpers.ValidationMessages.FileRequired}*");
 
@@ -161,7 +161,7 @@ public class ReceiptServiceUploadTests : IDisposable
         var f = new Mock<IFormFile>();
         f.Setup(x => x.Length).Returns(0);
 
-        await _sut.Invoking(s => s.UploadAsync(new UploadReceiptItemDto { File = f.Object }))
+        await _sut.Invoking(s => s.UploadAsync(new UploadReceiptItemDto { File = f.Object }, null))
             .Should().ThrowAsync<ArgumentException>()
             .WithMessage($"*{TestHelpers.ValidationMessages.FileRequired}*");
 
@@ -174,7 +174,7 @@ public class ReceiptServiceUploadTests : IDisposable
         var f = new Mock<IFormFile>();
         f.Setup(x => x.Length).Returns(20_000_001);
 
-        await _sut.Invoking(s => s.UploadAsync(new UploadReceiptItemDto { File = f.Object }))
+        await _sut.Invoking(s => s.UploadAsync(new UploadReceiptItemDto { File = f.Object }, null))
             .Should().ThrowAsync<ArgumentException>()
             .WithMessage($"*{TestHelpers.ValidationMessages.FileTooLarge}*");
 
@@ -198,7 +198,7 @@ public class ReceiptServiceUploadTests : IDisposable
             StoreName = "Store A",
             PurchasedAt = _now,
             Notes = "n1"
-        });
+        }, null);
 
         SetupBlobHappy(); // new blob for second upload
         var r2 = await _sut.UploadAsync(new UploadReceiptItemDto
@@ -207,7 +207,7 @@ public class ReceiptServiceUploadTests : IDisposable
             StoreName = "Store B",
             PurchasedAt = _now,
             Notes = "n2"
-        });
+        }, null);
 
         r1.Id.Should().NotBeEmpty();
         r2.Id.Should().NotBeEmpty();

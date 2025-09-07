@@ -33,6 +33,12 @@ public sealed class ReceiptItemsService : IReceiptItemsService
         var exists = await _db.Receipts.AnyAsync(r => r.Id == receiptId, ct);
         if (!exists) return null;
 
+        // Basic numeric guards
+        if (dto.Qty <= 0m) throw new ArgumentException("Qty must be > 0.", nameof(dto.Qty));
+        if (dto.UnitPrice < 0m) throw new ArgumentException("UnitPrice cannot be negative.", nameof(dto.UnitPrice));
+        if (dto.Discount is < 0m) throw new ArgumentException("Discount cannot be negative.", nameof(dto.Discount));
+        if (dto.Tax is < 0m) throw new ArgumentException("Tax cannot be negative.", nameof(dto.Tax));
+
         // Compute next position: if dto.Position < 1, use max+1
         var maxPos = await _db.ReceiptItems
             .Where(x => x.ReceiptId == receiptId)
@@ -47,6 +53,10 @@ public sealed class ReceiptItemsService : IReceiptItemsService
         // Block user-created "Adjustment" rows (system-managed)
         if (string.Equals(normalizedLabel, "Adjustment", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The 'Adjustment' line is system-managed and cannot be created manually.");
+
+        // Block totals/promo/meta rows as user items (keep item list to purchasables)
+        if (LooksLikeNonItem(normalizedLabel))
+            throw new InvalidOperationException("Labels like Subtotal/Tax/Tip/Discount/Promo are totals/meta and cannot be added as items.");
 
         var item = new ReceiptItem
         {
@@ -102,6 +112,12 @@ public sealed class ReceiptItemsService : IReceiptItemsService
         // Position: if API allows changing it, keep existing value if missing
         if (dto.Position.HasValue) item.Position = dto.Position.Value;
 
+        // Numeric guards
+        if (item.Qty <= 0m) throw new ArgumentException("Qty must be > 0.");
+        if (item.UnitPrice < 0m) throw new ArgumentException("UnitPrice cannot be negative.");
+        if (item.Discount is < 0m) throw new ArgumentException("Discount cannot be negative.");
+        if (item.Tax is < 0m) throw new ArgumentException("Tax cannot be negative.");
+
         // Normalize numbers
         item.Qty = NormalizeQty(item.Qty);
         item.UnitPrice = Round2(item.UnitPrice);
@@ -117,6 +133,10 @@ public sealed class ReceiptItemsService : IReceiptItemsService
             throw new InvalidOperationException("System-generated Adjustment cannot be modified manually.");
         if (!item.IsSystemGenerated && string.Equals(item.Label, "Adjustment", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The 'Adjustment' line is system-managed and cannot be modified manually.");
+
+        // Block totals/promo/meta labels on updates too
+        if (!item.IsSystemGenerated && LooksLikeNonItem(item.Label))
+            throw new InvalidOperationException("Labels like Subtotal/Tax/Tip/Discount/Promo are totals/meta and cannot be used for items.");
 
         // Clamp discount ≤ line subtotal
         var maxDiscount = Round2(item.Qty * item.UnitPrice);
@@ -204,6 +224,24 @@ public sealed class ReceiptItemsService : IReceiptItemsService
             t = QtySuffixNx.Replace(t, "");
 
         return t.Trim();
+    }
+
+    // Keep server source of truth consistent with orchestrator: block totals/promo/meta as items
+    private static readonly Regex NonItemPhrase = new(
+        @"\b(subtotal|sub\s*total|total(?!\s*wine)|amount\s*due|sales?\s*tax|tax|tip|gratuity|service(\s*fee)?|discount|promo|promotion|coupon|offer|save|spend|member|loyalty|rewards|bogo|%[\s-]*off|pre[-\s]?discount\s*subtotal|discount\s*total)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex TrailingMinusOrParens = new(
+        @"\(\s*\d+(?:[.,]\d+)?\s*\)|\d+(?:[.,]\d+)?\s*[-–—]\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static bool LooksLikeNonItem(string desc)
+    {
+        if (string.IsNullOrWhiteSpace(desc)) return true;
+        var d = desc.ToLowerInvariant();
+        if (NonItemPhrase.IsMatch(d)) return true;
+        if (TrailingMinusOrParens.IsMatch(d)) return true; // e.g., "(5.16)" or "5.16-"
+        return false;
     }
     #endregion
 }

@@ -16,6 +16,9 @@ namespace Api.Services.Receipts
         IClock clock
     ) : IReceiptReconciliationOrchestrator
     {
+        private const string AutoAdjLabel = "Adjustment";
+        private const string AutoAdjNote = "Auto-reconcile";
+
         public async Task ReconcileAsync(Guid receiptId, CancellationToken ct = default)
         {
             // 1) Load receipt + items (preserve OCR totals)
@@ -26,7 +29,7 @@ namespace Api.Services.Receipts
             var isMidParse = r.Status == ReceiptStatus.PendingParse;
 
             // 2) Reconcile using current items + printed totals
-            var parsed = BuildParsedReceipt(r);
+            var parsed = BuildParsedReceipt(r); // excludes system Adjustment from math
             var result = reconciliation.Reconcile(parsed);
 
             // 3) Persist transparency fields (always)
@@ -44,7 +47,8 @@ namespace Api.Services.Receipts
 
                 // Remove any stale system Adjustment created by earlier runs
                 var staleAdj = r.Items
-                    .Where(x => x.IsSystemGenerated && string.Equals(x.Label, "Adjustment", StringComparison.OrdinalIgnoreCase))
+                    .Where(x => x.IsSystemGenerated &&
+                                string.Equals(x.Label, AutoAdjLabel, StringComparison.OrdinalIgnoreCase))
                     .ToList();
                 if (staleAdj.Count > 0)
                     db.ReceiptItems.RemoveRange(staleAdj);
@@ -53,13 +57,30 @@ namespace Api.Services.Receipts
                 return;
             }
 
-            // 4) After parsing is complete: set status & maintain a single system Adjustment
+            // 4) After parsing is complete: set status
             r.Status = result.Status == ParseStatus.Success
                 ? ReceiptStatus.Parsed
                 : ReceiptStatus.ParsedNeedsReview;
             r.NeedsReview = r.Status == ReceiptStatus.ParsedNeedsReview;
 
-            await UpsertAdjustment(r, result, ct);
+            // Only keep/create auto Adjustment when fully Parsed
+            var allowAutoAdjust = r.Status == ReceiptStatus.Parsed;
+
+            if (!allowAutoAdjust)
+            {
+                // Remove any system adjustment so discrepancy remains visible
+                var autos = r.Items
+                    .Where(x => x.IsSystemGenerated &&
+                                string.Equals(x.Label, AutoAdjLabel, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (autos.Count > 0)
+                    db.ReceiptItems.RemoveRange(autos);
+            }
+            else
+            {
+                await UpsertAdjustment(r, result, ct);
+            }
+
             await db.SaveChangesAsync(ct);
 
             // 5) If totals were missing, roll up from items (never overwrite valid OCR totals)
@@ -82,6 +103,7 @@ namespace Api.Services.Receipts
             var hasItems = await db.ReceiptItems.AnyAsync(x => x.ReceiptId == receiptId, ct);
             if (!hasItems) return;
 
+            // Note: by this point, system Adjustment exists only when Status==Parsed.
             var agg = await db.ReceiptItems
                 .Where(x => x.ReceiptId == receiptId)
                 .GroupBy(_ => 1)
@@ -105,7 +127,7 @@ namespace Api.Services.Receipts
         {
             var items = r.Items
                 .Where(i => !i.IsSystemGenerated &&
-                            !string.Equals(i.Label, "Adjustment", StringComparison.OrdinalIgnoreCase))
+                            !string.Equals(i.Label, AutoAdjLabel, StringComparison.OrdinalIgnoreCase))
                 .Select(i => new ParsedItem(
                     Description: i.Label ?? string.Empty,
                     Qty: (int)Math.Round(i.Qty <= 0 ? 1m : i.Qty, MidpointRounding.AwayFromZero),
@@ -126,13 +148,14 @@ namespace Api.Services.Receipts
             // Remove any non-system "Adjustment" stragglers
             var rogueAdjustments = r.Items
                 .Where(x => !x.IsSystemGenerated &&
-                            string.Equals(x.Label, "Adjustment", StringComparison.OrdinalIgnoreCase))
+                            string.Equals(x.Label, AutoAdjLabel, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             if (rogueAdjustments.Count > 0)
                 db.ReceiptItems.RemoveRange(rogueAdjustments);
 
-            var adjustment = r.Items.FirstOrDefault(x => x.IsSystemGenerated &&
-                                                         string.Equals(x.Label, "Adjustment", StringComparison.OrdinalIgnoreCase));
+            var adjustment = r.Items.FirstOrDefault(x =>
+                x.IsSystemGenerated &&
+                string.Equals(x.Label, AutoAdjLabel, StringComparison.OrdinalIgnoreCase));
 
             if (!result.NeedsAdjustment)
             {
@@ -147,8 +170,8 @@ namespace Api.Services.Receipts
                 adjustment = new ReceiptItem
                 {
                     ReceiptId = r.Id,
-                    Label = "Adjustment",
-                    Notes = "Auto-reconcile",
+                    Label = AutoAdjLabel,
+                    Notes = AutoAdjNote,
                     IsSystemGenerated = true,
                     Qty = 1,
                     UnitPrice = delta,
@@ -161,7 +184,7 @@ namespace Api.Services.Receipts
             else
             {
                 adjustment.UnitPrice = delta;
-                adjustment.Notes = "Auto-reconcile";
+                adjustment.Notes = AutoAdjNote;
                 adjustment.UpdatedAt = clock.UtcNow;
                 ReceiptItemMaps.Recalculate(adjustment);
                 db.ReceiptItems.Update(adjustment);

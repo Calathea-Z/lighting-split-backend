@@ -27,6 +27,10 @@ public sealed class ReceiptService(
 {
     private readonly StorageOptions _storage = storageOptions.Value;
 
+    // --- Auto-adjust identifiers (keep in sync with reconciler) ---
+    private const string AutoAdjLabel = "Adjustment";
+    private const string AutoAdjNote = "Auto-reconcile";
+
     public async Task<ReceiptSummaryDto> CreateAsync(CreateReceiptDto dto, CancellationToken ct = default)
     {
         if (dto is null) throw new ArgumentException("Body is required.", nameof(dto));
@@ -146,8 +150,10 @@ public sealed class ReceiptService(
         var exists = await db.Receipts.AnyAsync(x => x.Id == id, ct);
         if (!exists) return null;
 
+        // Rollup from items, but EXCLUDE auto-adjust rows
         var agg = await db.ReceiptItems
-            .Where(i => i.ReceiptId == id)
+            .Where(i => i.ReceiptId == id &&
+                        !(i.IsSystemGenerated && i.Label == AutoAdjLabel && i.Notes == AutoAdjNote))
             .GroupBy(_ => 1)
             .Select(g => new
             {
@@ -184,8 +190,11 @@ public sealed class ReceiptService(
                 .SetProperty(r => r.ParseError, _ => (string?)null)
                 .SetProperty(r => r.UpdatedAt, _ => clock.UtcNow), ct);
 
-        // Centralized reconciliation
+        // Centralized reconciliation (computes discrepancy etc.)
         await reconciler.ReconcileAsync(id, ct);
+
+        // NEW: if not fully Parsed, remove any auto-adjust rows so we don't mask parse issues
+        await RemoveAutoAdjustmentsIfNotAllowed(id, ct);
 
         return await db.Receipts.AsNoTracking()
             .Where(x => x.Id == id)
@@ -377,5 +386,24 @@ public sealed class ReceiptService(
 
         // Fallback: message contains 'duplicate key'
         return ex.InnerException?.Message?.IndexOf("duplicate key", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    // Remove any auto-adjust rows if the receipt is not fully Parsed
+    private async Task RemoveAutoAdjustmentsIfNotAllowed(Guid receiptId, CancellationToken ct)
+    {
+        var status = await db.Receipts
+            .Where(r => r.Id == receiptId)
+            .Select(r => r.Status)
+            .FirstAsync(ct);
+
+        var allowAutoAdjust = status == ReceiptStatus.Parsed;
+        if (allowAutoAdjust) return;
+
+        await db.ReceiptItems
+            .Where(i => i.ReceiptId == receiptId &&
+                        i.IsSystemGenerated &&
+                        i.Label == AutoAdjLabel &&
+                        i.Label == AutoAdjNote)
+            .ExecuteDeleteAsync(ct);
     }
 }
