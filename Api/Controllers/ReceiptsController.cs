@@ -3,6 +3,7 @@ using Api.Abstractions.Transport;
 using Api.Dtos.Receipts.Requests;
 using Api.Dtos.Receipts.Responses;
 using Api.Dtos.Receipts.Responses.Items;
+using Api.Models;
 using Api.Services.Receipts.Abstractions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -62,10 +63,7 @@ public sealed class ReceiptsController(IReceiptService receiptService) : Control
     [HttpPost("upload")]
     [RequestSizeLimit(20_000_000)]
     [Consumes("multipart/form-data")]
-    public async Task<ActionResult<ReceiptSummaryDto>> Upload(
-        [FromForm] UploadReceiptItemDto form,
-        [FromHeader(Name = "Idempotency-Key")] string? idemKey,
-        CancellationToken ct = default)
+    public async Task<ActionResult<ReceiptSummaryDto>> Upload([FromForm] UploadReceiptItemDto form, [FromHeader(Name = "Idempotency-Key")] string? idemKey, CancellationToken ct = default)
     {
         try
         {
@@ -117,6 +115,14 @@ public sealed class ReceiptsController(IReceiptService receiptService) : Control
     {
         var result = await receiptService.UpdateReviewAsync(id, dto, ct);
         return result is null ? NotFound() : Ok(result);
+    }
+
+    // PATCH /api/receipts/{id}/parse-meta
+    [HttpPatch("{id:guid}/parse-meta")]
+    public async Task<IActionResult> UpdateMetaData(Guid id, [FromBody] UpdateParseMetaRequest body, CancellationToken ct = default)
+    {
+        var ok = await receiptService.UpdateParseMetaAsync(id, body, ct);
+        return ok ? NoContent() : NotFound();
     }
 
     // DELETE /api/receipts/{id}

@@ -194,7 +194,6 @@ public sealed class ReceiptService(
         // Centralized reconciliation (computes discrepancy etc.)
         await reconciler.ReconcileAsync(id, ct);
 
-        // NEW: if not fully Parsed, remove any auto-adjust rows so we don't mask parse issues
         await RemoveAutoAdjustmentsIfNotAllowed(id, ct);
 
         return await db.Receipts.AsNoTracking()
@@ -378,7 +377,25 @@ public sealed class ReceiptService(
             .FirstAsync(ct);
     }
 
-    // Helpers
+    public async Task<bool> UpdateParseMetaAsync(Guid id, UpdateParseMetaRequest req, CancellationToken ct = default)
+    {
+        var r = await db.Receipts.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (r is null) return false;
+
+        r.ParsedBy = req.ParsedBy;
+        r.LlmAttempted = req.LlmAttempted;
+        r.LlmAccepted = req.LlmAccepted;
+        r.LlmModel = string.IsNullOrWhiteSpace(req.LlmModel) ? null : req.LlmModel;
+        r.ParserVersion = req.ParserVersion;
+        r.RejectReason = req.RejectReason;
+        r.ParsedAt = DateTime.UtcNow;
+
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    #region Helpers
+    
     private static bool IsUniqueViolation(DbUpdateException ex)
     {
         // Npgsql: SQLSTATE 23505 = unique_violation
@@ -407,4 +424,6 @@ public sealed class ReceiptService(
                         i.Label == AutoAdjNote)
             .ExecuteDeleteAsync(ct);
     }
+    
+    #endregion
 }
