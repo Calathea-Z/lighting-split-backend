@@ -1,6 +1,7 @@
 using Api.Abstractions.Receipts;
+using Api.Abstractions.Transport;
 using Api.Common.Interfaces;
-using Api.Contracts.Receipts;
+using Api.Contracts.Reconciliation;
 using Api.Data;
 using Api.Dtos.Receipts.Requests;
 using Api.Dtos.Receipts.Requests.Items;
@@ -74,14 +75,13 @@ public class ReceiptServiceTests : IDisposable
         // Arrange
         var dto = new CreateReceiptDto
         {
-            Items = new List<CreateReceiptItemDto>
+            Items = new List<CreateReceiptItemRequest>
             {
-                new()
-                {
-                    Label = "Test Item",
-                    Qty = 2,
-                    UnitPrice = 10.50m
-                }
+                new(
+                    Label: "Test Item",
+                    Qty: 2,
+                    UnitPrice: 10.50m
+                )
             },
             // Provide the totals explicitly to avoid relying on reconciliation logic
             SubTotal = 21.00m, // 2 * 10.50
@@ -123,7 +123,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task CreateAsync_WithEmptyItems_ShouldThrowArgumentException()
     {
         // Arrange
-        var dto = new CreateReceiptDto { Items = new List<CreateReceiptItemDto>() };
+        var dto = new CreateReceiptDto { Items = new List<CreateReceiptItemRequest>() };
 
         // Act & Assert
         await _receiptService.Invoking(s => s.CreateAsync(dto))
@@ -137,9 +137,9 @@ public class ReceiptServiceTests : IDisposable
         // Arrange
         var dto = new CreateReceiptDto
         {
-            Items = new List<CreateReceiptItemDto>
+            Items = new List<CreateReceiptItemRequest>
             {
-                new() { Label = "Test", Qty = 0, UnitPrice = 10m }
+                new(Label: "Test", Qty: 0, UnitPrice: 10m)
             }
         };
 
@@ -155,9 +155,9 @@ public class ReceiptServiceTests : IDisposable
         // Arrange
         var dto = new CreateReceiptDto
         {
-            Items = new List<CreateReceiptItemDto>
+            Items = new List<CreateReceiptItemRequest>
             {
-                new() { Label = "Test", Qty = 1, UnitPrice = -10m }
+                new(Label: "Test", Qty: 1, UnitPrice: -10m)
             }
         };
 
@@ -173,16 +173,15 @@ public class ReceiptServiceTests : IDisposable
         // Arrange
         var dto = new CreateReceiptDto
         {
-            Items = new List<CreateReceiptItemDto>
+            Items = new List<CreateReceiptItemRequest>
             {
-                new()
-                {
-                    Label = "Test Item",
-                    Qty = 2,
-                    UnitPrice = 10.00m,
-                    Discount = 2.00m,
-                    Tax = 1.50m
-                }
+                new(
+                    Label: "Test Item",
+                    Qty: 2,
+                    UnitPrice: 10.00m,
+                    Discount: 2.00m,
+                    Tax: 1.50m
+                )
             },
             // Provide the totals explicitly to avoid relying on reconciliation logic
             SubTotal = 18.00m, // (2 * 10) - 2 discount
@@ -366,19 +365,25 @@ public class ReceiptServiceTests : IDisposable
         _dbContext.Receipts.Add(receipt);
         await _dbContext.SaveChangesAsync();
 
-        var updateDto = new UpdateTotalsDto(20m, 2m, 3m, 25m);
+        var updateDto = TestHelpers.CreateValidUpdateTotalsRequest();
+        
 
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UpdateTotalsAsync(receipt.Id, updateDto))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ExecuteUpdate*");
+        // Act
+        var result = await _receiptService.UpdateTotalsAsync(receipt.Id, updateDto);
+
+        // Assert
+        result.Should().NotBeNull();
+        result!.SubTotal.Should().Be(30.00m);
+        result.Tax.Should().Be(3.00m);
+        result.Tip.Should().Be(6.00m);
+        result.Total.Should().Be(39.00m);
     }
 
     [Fact(Skip = "Requires real Postgres (ExecuteUpdateAsync not supported by InMemory).")]
     public async Task UpdateTotalsAsync_WithNonExistentReceipt_ShouldReturnNull()
     {
         // Arrange
-        var updateDto = new UpdateTotalsDto(20m, null, null, null);
+        var updateDto = new UpdateTotalsRequest(20m, null, null, null);
 
         // Act
         var result = await _receiptService.UpdateTotalsAsync(Guid.NewGuid(), updateDto);
@@ -399,19 +404,26 @@ public class ReceiptServiceTests : IDisposable
         _dbContext.Receipts.Add(receipt);
         await _dbContext.SaveChangesAsync();
 
-        // Act & Assert
-        await _receiptService.Invoking(s => s.MarkParseFailedAsync(receipt.Id, "Test error"))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ExecuteUpdate*");
+        // Act
+        var result = await _receiptService.MarkParseFailedAsync(receipt.Id, "Test error");
+
+        // Assert
+        result.Should().BeTrue();
+        
+        var updatedReceipt = await _dbContext.Receipts.FindAsync(receipt.Id);
+        updatedReceipt!.Status.Should().Be(ReceiptStatus.FailedParse);
+        updatedReceipt.ParseError.Should().Be("Test error");
+        updatedReceipt.NeedsReview.Should().BeTrue();
     }
 
     [Fact(Skip = "Requires real Postgres (ExecuteUpdateAsync not supported by InMemory).")]
     public async Task MarkParseFailedAsync_WithNonExistentReceipt_ShouldReturnFalse()
     {
-        // Act & Assert
-        await _receiptService.Invoking(s => s.MarkParseFailedAsync(Guid.NewGuid(), "Test error"))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ExecuteUpdate*");
+        // Act
+        var result = await _receiptService.MarkParseFailedAsync(Guid.NewGuid(), "Test error");
+
+        // Assert
+        result.Should().BeFalse();
     }
 
     [Fact(Skip = "Requires real Postgres (ExecuteUpdateAsync not supported by InMemory).")]
@@ -426,24 +438,29 @@ public class ReceiptServiceTests : IDisposable
         _dbContext.Receipts.Add(receipt);
         await _dbContext.SaveChangesAsync();
 
-        var dto = new UpdateRawTextDto("Updated raw text content");
+        var dto = TestHelpers.CreateValidUpdateRawTextRequest();
 
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UpdateRawTextAsync(receipt.Id, dto))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ExecuteUpdate*");
+        // Act
+        var result = await _receiptService.UpdateRawTextAsync(receipt.Id, dto);
+
+        // Assert
+        result.Should().NotBeNull();
+        
+        var updatedReceipt = await _dbContext.Receipts.FindAsync(receipt.Id);
+        updatedReceipt!.RawText.Should().Be("Updated raw text content");
     }
 
     [Fact(Skip = "Requires real Postgres (ExecuteUpdateAsync not supported by InMemory).")]
     public async Task UpdateRawTextAsync_WithNonExistentReceipt_ShouldReturnNull()
     {
         // Arrange
-        var dto = new UpdateRawTextDto("Test content");
+        var dto = new UpdateRawTextRequest("Test content");
 
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UpdateRawTextAsync(Guid.NewGuid(), dto))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ExecuteUpdate*");
+        // Act
+        var result = await _receiptService.UpdateRawTextAsync(Guid.NewGuid(), dto);
+
+        // Assert
+        result.Should().BeNull();
     }
 
     [Fact(Skip = "Requires real Postgres (ExecuteUpdateAsync not supported by InMemory).")]
@@ -458,24 +475,30 @@ public class ReceiptServiceTests : IDisposable
         _dbContext.Receipts.Add(receipt);
         await _dbContext.SaveChangesAsync();
 
-        var dto = new UpdateStatusDto(ReceiptStatus.ParsedNeedsReview);
+        var dto = new UpdateStatusRequest(ReceiptStatus.ParsedNeedsReview);
 
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UpdateStatusAsync(receipt.Id, dto))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ExecuteUpdate*");
+        // Act
+        var result = await _receiptService.UpdateStatusAsync(receipt.Id, dto);
+
+        // Assert
+        result.Should().NotBeNull();
+        
+        var updatedReceipt = await _dbContext.Receipts.FindAsync(receipt.Id);
+        updatedReceipt!.Status.Should().Be(ReceiptStatus.ParsedNeedsReview);
+        updatedReceipt.NeedsReview.Should().BeTrue();
     }
 
     [Fact(Skip = "Requires real Postgres (ExecuteUpdateAsync not supported by InMemory).")]
     public async Task UpdateStatusAsync_WithNonExistentReceipt_ShouldReturnNull()
     {
         // Arrange
-        var dto = new UpdateStatusDto(ReceiptStatus.Parsed);
+        var dto = new UpdateStatusRequest(ReceiptStatus.Parsed);
 
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UpdateStatusAsync(Guid.NewGuid(), dto))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ExecuteUpdate*");
+        // Act
+        var result = await _receiptService.UpdateStatusAsync(Guid.NewGuid(), dto);
+
+        // Assert
+        result.Should().BeNull();
     }
 
     [Fact(Skip = "Requires real Postgres (ExecuteUpdateAsync not supported by InMemory).")]
@@ -493,10 +516,14 @@ public class ReceiptServiceTests : IDisposable
 
         var dto = new UpdateReviewDto(true, "Needs manual review");
 
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UpdateReviewAsync(receipt.Id, dto))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ExecuteUpdate*");
+        // Act
+        var result = await _receiptService.UpdateReviewAsync(receipt.Id, dto);
+
+        // Assert
+        result.Should().NotBeNull();
+        
+        var updatedReceipt = await _dbContext.Receipts.FindAsync(receipt.Id);
+        updatedReceipt!.NeedsReview.Should().BeTrue();
     }
 
     [Fact(Skip = "Requires real Postgres (ExecuteUpdateAsync not supported by InMemory).")]
@@ -505,11 +532,53 @@ public class ReceiptServiceTests : IDisposable
         // Arrange
         var dto = new UpdateReviewDto(false, null);
 
-        // Act & Assert
-        await _receiptService.Invoking(s => s.UpdateReviewAsync(Guid.NewGuid(), dto))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ExecuteUpdate*");
+        // Act
+        var result = await _receiptService.UpdateReviewAsync(Guid.NewGuid(), dto);
+
+        // Assert
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpdateParseMetaAsync_WithExistingReceipt_ShouldUpdateParseMeta()
+    {
+        // Arrange
+        var receipt = new Api.Models.Receipt
+        {
+            Id = Guid.NewGuid(),
+            Status = ReceiptStatus.Parsed
+        };
+        _dbContext.Receipts.Add(receipt);
+        await _dbContext.SaveChangesAsync();
+
+        var dto = TestHelpers.CreateValidUpdateParseMetaRequest();
+
+        // Act
+        var result = await _receiptService.UpdateParseMetaAsync(receipt.Id, dto);
+
+        // Assert
+        result.Should().BeTrue();
+        
+        var updatedReceipt = await _dbContext.Receipts.FindAsync(receipt.Id);
+        updatedReceipt!.ParsedBy.Should().Be(ParseEngine.Heuristics);
+        updatedReceipt.LlmAttempted.Should().BeTrue();
+        updatedReceipt.LlmAccepted.Should().BeTrue();
+        updatedReceipt.LlmModel.Should().Be("gpt-4");
+        updatedReceipt.ParserVersion.Should().Be("1.0.0");
+        updatedReceipt.ParsedAt.Should().NotBeNull();
     }
 
     #endregion
+    [Fact]
+    public async Task UpdateParseMetaAsync_WithNonExistentReceipt_ShouldReturnFalse()
+    {
+        // Arrange
+        var dto = TestHelpers.CreateValidUpdateParseMetaRequest();
+
+        // Act
+        var result = await _receiptService.UpdateParseMetaAsync(Guid.NewGuid(), dto);
+
+        // Assert
+        result.Should().BeFalse();
+    }
 }

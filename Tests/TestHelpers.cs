@@ -1,4 +1,5 @@
 using Api.Abstractions.Receipts;
+using Api.Abstractions.Transport;
 using Api.Dtos.Receipts.Requests;
 using Api.Dtos.Receipts.Requests.Items;
 using Api.Models;
@@ -11,42 +12,39 @@ public static class TestHelpers
     {
         return new CreateReceiptDto
         {
-            Items = new List<CreateReceiptItemDto>
+            Items = new List<CreateReceiptItemRequest>
             {
-                new()
-                {
-                    Label = "Test Item 1",
-                    Qty = 2,
-                    UnitPrice = 10.50m,
-                    Unit = "ea",
-                    Category = "Food",
-                    Notes = "Test notes"
-                },
-                new()
-                {
-                    Label = "Test Item 2",
-                    Qty = 1,
-                    UnitPrice = 5.25m,
-                    Discount = 1.00m,
-                    Tax = 0.50m
-                }
+                new(
+                    Label: "Test Item 1",
+                    Qty: 2,
+                    UnitPrice: 10.50m,
+                    Unit: "ea",
+                    Category: "Food",
+                    Notes: "Test notes"
+                ),
+                new(
+                    Label: "Test Item 2",
+                    Qty: 1,
+                    UnitPrice: 5.25m,
+                    Discount: 1.00m,
+                    Tax: 0.50m
+                )
             }
         };
     }
 
-    public static CreateReceiptItemDto CreateValidReceiptItemDto()
+    public static CreateReceiptItemRequest CreateValidReceiptItemRequest()
     {
-        return new CreateReceiptItemDto
-        {
-            Label = "Test Item",
-            Qty = 3,
-            UnitPrice = 7.50m,
-            Unit = "lb",
-            Category = "Produce",
-            Notes = "Fresh produce",
-            Discount = 2.00m,
-            Tax = 1.25m
-        };
+        return new CreateReceiptItemRequest(
+            Label: "Test Item",
+            Qty: 3,
+            UnitPrice: 7.50m,
+            Unit: "lb",
+            Category: "Produce",
+            Notes: "Fresh produce",
+            Discount: 2.00m,
+            Tax: 1.25m
+        );
     }
 
     public static Receipt CreateTestReceipt(Guid? id = null, ReceiptStatus? status = null)
@@ -109,9 +107,59 @@ public static class TestHelpers
         };
     }
 
-    public static UpdateTotalsDto CreateValidUpdateTotalsDto()
+    public static UpdateTotalsRequest CreateValidUpdateTotalsRequest()
     {
-        return new UpdateTotalsDto(30.00m, 3.00m, 6.00m, 39.00m);
+        return new UpdateTotalsRequest(30.00m, 3.00m, 6.00m, 39.00m);
+    }
+
+    public static UpdateRawTextRequest CreateValidUpdateRawTextRequest()
+    {
+        return new UpdateRawTextRequest("Updated raw text content");
+    }
+
+    public static UpdateStatusRequest CreateValidUpdateStatusRequest()
+    {
+        return new UpdateStatusRequest(ReceiptStatus.Parsed);
+    }
+
+    public static UpdateParseMetaRequest CreateValidUpdateParseMetaRequest()
+    {
+        return new UpdateParseMetaRequest(
+            ParsedBy: ParseEngine.Heuristics,
+            LlmAttempted: true,
+            LlmAccepted: true,
+            LlmModel: "gpt-4",
+            ParserVersion: "1.0.0",
+            RejectReason: null
+        );
+    }
+
+    public static CreateReceiptItemRequest CreateValidCreateReceiptItemRequest()
+    {
+        return new CreateReceiptItemRequest(
+            Label: "Test Item",
+            Qty: 3,
+            UnitPrice: 7.50m,
+            Unit: "lb",
+            Category: "Produce",
+            Notes: "Fresh produce",
+            Discount: 2.00m,
+            Tax: 1.25m
+        );
+    }
+
+    public static UpdateReceiptItemRequest CreateValidUpdateReceiptItemRequest()
+    {
+        return new UpdateReceiptItemRequest(
+            Label: "Updated Item",
+            Qty: 3,
+            UnitPrice: 12.00m,
+            Unit: "ea",
+            Category: "Updated Category",
+            Notes: "Updated notes",
+            Position: 1,
+            Version: 1
+        );
     }
 
     public static UpdateReceiptItemDto CreateValidUpdateReceiptItemDto(uint version = 1)
@@ -158,6 +206,14 @@ public static class TestHelpers
         public const string FileRequired = "File is required.";
         public const string FileTooLarge = "File too large (>20MB).";
         public const string ConcurrencyConflict = "Concurrency conflict. Reload the item and try again.";
+        public const string AdjustmentSystemManaged = "The 'Adjustment' line is system-managed and cannot be created manually.";
+        public const string AdjustmentCannotModify = "System-generated Adjustment cannot be modified manually.";
+        public const string AdjustmentCannotDelete = "System-generated Adjustment cannot be deleted manually.";
+        public const string NonItemLabels = "Labels like Subtotal/Tax/Tip/Discount/Promo are totals/meta and cannot be added as items.";
+        public const string QtyMustBePositive = "Qty must be > 0.";
+        public const string UnitPriceCannotBeNegative = "UnitPrice cannot be negative.";
+        public const string DiscountCannotBeNegative = "Discount cannot be negative.";
+        public const string TaxCannotBeNegative = "Tax cannot be negative.";
     }
 
     public static class TestConstants
