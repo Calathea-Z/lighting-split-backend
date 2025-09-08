@@ -18,4 +18,5 @@ public interface IReceiptService
     Task<ReceiptSummaryDto?> UpdateStatusAsync(Guid id, UpdateStatusRequest dto, CancellationToken ct = default);
     Task<ReceiptSummaryDto?> UpdateReviewAsync(Guid id, UpdateReviewDto dto, CancellationToken ct = default);
     Task<bool> UpdateParseMetaAsync(Guid id, UpdateParseMetaRequest req, CancellationToken ct = default);
+    Task<ReceiptSummaryDto?> ReplaceItemsAsync(Guid id, ReplaceReceiptItemsRequest req, CancellationToken ct = default);
 }

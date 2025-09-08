@@ -32,6 +32,8 @@ public sealed class ReceiptService(
     private const string AutoAdjLabel = "Adjustment";
     private const string AutoAdjNote = "Auto-reconcile";
 
+    private static decimal Round2(decimal d) => Math.Round(d, 2, MidpointRounding.AwayFromZero);
+
     public async Task<ReceiptSummaryDto> CreateAsync(CreateReceiptDto dto, CancellationToken ct = default)
     {
         if (dto is null) throw new ArgumentException("Body is required.", nameof(dto));
@@ -389,8 +391,6 @@ public sealed class ReceiptService(
             .FirstAsync(ct);
     }
 
-
-
     public async Task<ReceiptSummaryDto?> UpdateReviewAsync(Guid id, UpdateReviewDto dto, CancellationToken ct = default)
     {
         var rows = await db.Receipts
@@ -422,6 +422,49 @@ public sealed class ReceiptService(
 
         await db.SaveChangesAsync(ct);
         return true;
+    }
+
+    public async Task<ReceiptSummaryDto?> ReplaceItemsAsync(Guid id, ReplaceReceiptItemsRequest req, CancellationToken ct = default)
+    {
+        // verify receipt
+        var receipt = await db.Receipts.FirstOrDefaultAsync(r => r.Id == id, ct);
+        if (receipt is null) return null;
+
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        // remove existing items
+        await db.ReceiptItems.Where(i => i.ReceiptId == id).ExecuteDeleteAsync(ct);
+
+        // map request -> entities
+        var entities = req.Items.Select(i => new ReceiptItem
+        {
+            Id = Guid.NewGuid(),
+            ReceiptId = id,
+            Label = i.Label,
+            Qty = i.Qty,
+            UnitPrice = i.UnitPrice,
+            Notes = i.Notes
+        }).ToList();
+
+        if (entities.Count > 0)
+            await db.ReceiptItems.AddRangeAsync(entities, ct);
+
+        // transparency fields
+        var computed = Round2(entities.Sum(e => e.Qty * e.UnitPrice));
+        receipt.ComputedItemsSubtotal = entities.Count == 0 ? null : computed;
+        receipt.BaselineSubtotal = receipt.SubTotal; // keep a snapshot of printed subtotal
+        // Optionally store delta for transparency (do not set Reason here—status flow controls that)
+        receipt.Discrepancy = (receipt.SubTotal is decimal s) ? Round2(s - computed) : null;
+
+        receipt.UpdatedAt = clock.UtcNow;
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+
+        return await db.Receipts.AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(r => r.ToSummaryDto())
+            .FirstAsync(ct);
     }
 
     #region Helpers

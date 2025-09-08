@@ -80,6 +80,13 @@ public sealed class ReceiptsController(IReceiptService receiptService) : Control
         }
     }
 
+    // PUT /api/receipts/{id}/items
+    [HttpPut("{id:guid}/items")]
+    public async Task<IActionResult> PutItems(Guid id, [FromBody] ReplaceReceiptItemsRequest body, CancellationToken ct)
+    {
+        var summary = await receiptService.ReplaceItemsAsync(id, body, ct);
+        return summary is null ? NotFound() : Ok(summary);
+    }
 
     // PATCH /api/receipts/{id}/totals
     [HttpPatch("{id:guid}/totals")]
