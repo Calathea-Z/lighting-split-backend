@@ -1,6 +1,7 @@
 using Api.Models;
 using Api.Models.Owners;
 using Api.Models.Receipts;
+using Api.Models.Splits;
 using Microsoft.EntityFrameworkCore;
 
 namespace Api.Data;
@@ -13,6 +14,10 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
     public DbSet<Owner> Owners => Set<Owner>();
     public DbSet<OwnerPayoutMethod> OwnerPayoutMethods => Set<OwnerPayoutMethod>();
     public DbSet<PayoutPlatform> PayoutPlatforms => Set<PayoutPlatform>();
+
+    public DbSet<SplitSession> SplitSessions => Set<SplitSession>();
+    public DbSet<SplitParticipant> SplitParticipants => Set<SplitParticipant>();
+    public DbSet<ItemClaim> ItemClaims => Set<ItemClaim>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -281,5 +286,56 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
                 SortOrder = 60
             }
         );
+
+
+        // =========================
+        // Split Session
+        // =========================
+
+        b.Entity<SplitSession>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(128);
+            e.HasIndex(x => new { x.OwnerId, x.CreatedAt });
+            e.HasIndex(x => new { x.ReceiptId, x.CreatedAt });
+
+            e.Property(x => x.CreatedAt).HasColumnType("timestamptz").HasDefaultValueSql("now()");
+            e.Property(x => x.UpdatedAt).HasColumnType("timestamptz").HasDefaultValueSql("now()");
+        });
+
+        // =========================
+        // Split Participant
+        // =========================
+
+        b.Entity<SplitParticipant>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.DisplayName).IsRequired().HasMaxLength(64);
+            e.HasIndex(x => new { x.SplitSessionId, x.SortOrder });
+
+            e.HasOne(x => x.Split)
+             .WithMany(s => s.Participants)
+             .HasForeignKey(x => x.SplitSessionId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // =========================
+        // Item Claim
+        // =========================
+
+        b.Entity<ItemClaim> (e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.QtyShare).HasPrecision(9, 3);
+
+            e.HasOne(x => x.Split)
+             .WithMany(s => s.Claims)
+             .HasForeignKey(x => x.SplitSessionId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            // unique per (split, item, participant)
+            e.HasIndex(x => new { x.SplitSessionId, x.ReceiptItemId, x.ParticipantId }).IsUnique();
+        });
+        
     }
 }
