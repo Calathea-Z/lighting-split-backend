@@ -4,7 +4,7 @@ using Api.Dtos.Splits.Responses;
 using Api.Services.Payments.Abstractions;
 using Microsoft.EntityFrameworkCore;
 
-namespace Api.Services;
+namespace Api.Services.Payments;
 
 public sealed class SplitCalculator : ISplitCalculator
 {

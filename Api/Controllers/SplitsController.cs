@@ -2,6 +2,7 @@
 using Api.Dtos.Splits.Requests;
 using Api.Dtos.Splits.Responses;
 using Api.Models.Splits;
+using Api.Services.Payments;
 using Api.Services.Payments.Abstractions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,10 +16,30 @@ public sealed class SplitsController : ControllerBase
     private readonly LightningDbContext _db;
     private readonly IAokService _aok;
     private readonly ISplitCalculator _calc;
+    private readonly ISplitFinalizerService _splitterFinalizerService;
+    private readonly ISplitPaymentService _splitPaymentService;
 
-    public SplitsController(LightningDbContext db, IAokService aok, ISplitCalculator calc)
+    public SplitsController(LightningDbContext db, IAokService aok, ISplitCalculator calc, ISplitFinalizerService splitterFinalizerService, ISplitPaymentService splitPaymentService)
     {
-        _db = db; _aok = aok; _calc = calc;
+        _db = db; 
+        _aok = aok; 
+        _calc = calc;
+        _splitterFinalizerService = splitterFinalizerService;
+        _splitPaymentService = splitPaymentService;
+    }
+
+    [HttpGet("{id:guid}/preview")]
+    public async Task<ActionResult<SplitPreviewDto>> Preview([FromRoute] Guid id)
+    {
+        var owner = await _aok.ResolveOwnerAsync(HttpContext);
+        if (owner is null) return Unauthorized();
+
+        // ensure the split belongs to owner
+        var own = await _db.SplitSessions.AnyAsync(s => s.Id == id && s.OwnerId == owner.Id);
+        if (!own) return NotFound();
+
+        var dto = await _calc.PreviewAsync(id);
+        return Ok(dto);
     }
 
     [HttpPost]
@@ -127,17 +148,35 @@ public sealed class SplitsController : ControllerBase
         return NoContent();
     }
 
-    [HttpGet("{id:guid}/preview")]
-    public async Task<ActionResult<SplitPreviewDto>> Preview([FromRoute] Guid id)
+    [HttpPost("{id:guid}/finalize")]
+    public async Task<ActionResult<FinalizeSplitResponse>> Finalize([FromRoute] Guid id)
     {
         var owner = await _aok.ResolveOwnerAsync(HttpContext);
         if (owner is null) return Unauthorized();
 
-        // ensure the split belongs to owner
-        var own = await _db.SplitSessions.AnyAsync(s => s.Id == id && s.OwnerId == owner.Id);
-        if (!own) return NotFound();
-
-        var dto = await _calc.PreviewAsync(id);
+        var baseUrl = $"{Request.Scheme}://{Request.Host}";
+        var dto = await _splitterFinalizerService.FinalizeAsync(id, owner.Id, baseUrl);
         return Ok(dto);
+    }
+
+
+    [HttpPatch("{id:guid}/participants/{participantId:guid}/payment")]
+    public async Task<IActionResult> SetPayment(
+        [FromRoute] Guid id,
+        [FromRoute] Guid participantId,
+        [FromBody] SetPaymentDto dto)
+    {
+        var owner = await _aok.ResolveOwnerAsync(HttpContext);
+        if (owner is null) return Unauthorized();
+
+        try
+        {
+            await _splitPaymentService.SetAsync(id, owner.Id, participantId, dto);
+            return NoContent();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 }

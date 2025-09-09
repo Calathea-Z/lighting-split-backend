@@ -6,7 +6,7 @@ using Api.Infrastructure.Queues;
 using Api.Infrastructure.Storage;
 using Api.Options;
 using Api.Options.Validators;
-using Api.Services;
+using Api.Services.Payments;
 using Api.Services.Payments.Abstractions;
 using Api.Services.Receipts;
 using Api.Services.Receipts.Abstractions;
@@ -80,6 +80,9 @@ builder.Services.AddScoped<IReceiptReconciliationCalculator, ReceiptReconciliati
 builder.Services.AddScoped<IPaymentLinkBuilder, PaymentLinkBuilder>();
 builder.Services.AddScoped<ISplitCalculator, SplitCalculator>();
 builder.Services.AddScoped<IAokService, AokService>();
+builder.Services.AddScoped<ISplitFinalizerService, SplitFinalizerService>();
+builder.Services.AddScoped<ISplitShareReader, SplitShareReader>();
+builder.Services.AddScoped<ISplitPaymentService, SplitPaymentService>();
 
 var app = builder.Build();
 

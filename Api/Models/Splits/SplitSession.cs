@@ -8,6 +8,9 @@
         public string? Name { get; set; }
 
         public bool IsFinalized { get; set; }
+        public string? ShareCode { get; set; }
+        public DateTimeOffset? FinalizedAt { get; set; }
+
         public DateTimeOffset CreatedAt { get; set; }
         public DateTimeOffset UpdatedAt { get; set; }
 

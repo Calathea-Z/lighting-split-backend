@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Api.Services;
+namespace Api.Services.Payments;
 
 public sealed class AokService : IAokService
 {

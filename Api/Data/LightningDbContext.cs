@@ -18,6 +18,10 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
     public DbSet<SplitSession> SplitSessions => Set<SplitSession>();
     public DbSet<SplitParticipant> SplitParticipants => Set<SplitParticipant>();
     public DbSet<ItemClaim> ItemClaims => Set<ItemClaim>();
+    public DbSet<SplitResult> SplitResults => Set<SplitResult>();
+    public DbSet<SplitParticipantResult> SplitParticipantResults => Set<SplitParticipantResult>();
+    public DbSet<SplitPayment> SplitPayments => Set<SplitPayment>();
+
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -296,11 +300,26 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
         {
             e.HasKey(x => x.Id);
             e.Property(x => x.Name).HasMaxLength(128);
+
+            e.Property(x => x.ShareCode).HasMaxLength(16);
+            e.HasIndex(x => x.ShareCode).IsUnique();
+
+            e.HasOne<Owner>()
+             .WithMany()
+             .HasForeignKey(x => x.OwnerId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasOne<Receipt>()
+             .WithMany()
+             .HasForeignKey(x => x.ReceiptId)
+             .OnDelete(DeleteBehavior.Restrict);
+
             e.HasIndex(x => new { x.OwnerId, x.CreatedAt });
             e.HasIndex(x => new { x.ReceiptId, x.CreatedAt });
 
             e.Property(x => x.CreatedAt).HasColumnType("timestamptz").HasDefaultValueSql("now()");
             e.Property(x => x.UpdatedAt).HasColumnType("timestamptz").HasDefaultValueSql("now()");
+            e.Property(x => x.FinalizedAt).HasColumnType("timestamptz");
         });
 
         // =========================
@@ -336,6 +355,54 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             // unique per (split, item, participant)
             e.HasIndex(x => new { x.SplitSessionId, x.ReceiptItemId, x.ParticipantId }).IsUnique();
         });
-        
+
+        // =========================
+        // Split Result
+        // =========================
+
+        b.Entity<SplitResult>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.CreatedAt).HasColumnType("timestamptz").HasDefaultValueSql("now()");
+            e.HasOne(x => x.Split).WithMany().HasForeignKey(x => x.SplitSessionId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // =========================
+        // Split Participant Result
+        // =========================
+
+        b.Entity<SplitParticipantResult>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.DisplayName).IsRequired().HasMaxLength(64);
+            e.HasOne(x => x.Result).WithMany(r => r.Participants).HasForeignKey(x => x.SplitResultId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.ItemsSubtotal).HasPrecision(18, 2);
+            e.Property(x => x.DiscountAlloc).HasPrecision(18, 2);
+            e.Property(x => x.TaxAlloc).HasPrecision(18, 2);
+            e.Property(x => x.TipAlloc).HasPrecision(18, 2);
+            e.Property(x => x.Total).HasPrecision(18, 2);
+        });
+
+        // =========================
+        // Split Payment
+        // =========================
+
+        // LightningDbContext.OnModelCreating add:
+        b.Entity<SplitPayment>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.SplitSessionId, x.ParticipantId }).IsUnique();
+            e.Property(x => x.PlatformKey).HasMaxLength(32);
+            e.Property(x => x.Note).HasMaxLength(256);
+            e.Property(x => x.Amount).HasPrecision(18, 2);
+            e.Property(x => x.CreatedAt).HasColumnType("timestamptz").HasDefaultValueSql("now()");
+            e.Property(x => x.UpdatedAt).HasColumnType("timestamptz").HasDefaultValueSql("now()");
+
+            e.HasOne<SplitSession>()
+             .WithMany()
+             .HasForeignKey(x => x.SplitSessionId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
     }
 }

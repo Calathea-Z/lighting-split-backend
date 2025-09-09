@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-namespace Api.Services;
+namespace Api.Services.Payments;
 
 public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
 {
