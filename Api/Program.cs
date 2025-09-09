@@ -78,6 +78,8 @@ builder.Services.AddScoped<IReceiptItemsService, ReceiptItemsService>();
 builder.Services.AddScoped<IReceiptReconciliationOrchestrator, ReceiptReconciliationOrchestrator>();
 builder.Services.AddScoped<IReceiptReconciliationCalculator, ReceiptReconciliationCalculator>();
 builder.Services.AddScoped<IPaymentLinkBuilder, PaymentLinkBuilder>();
+builder.Services.AddScoped<ISplitCalculator, SplitCalculator>();
+builder.Services.AddScoped<IAokService, AokService>();
 
 var app = builder.Build();
 
