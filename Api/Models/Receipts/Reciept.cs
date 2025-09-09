@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
 using Api.Abstractions.Receipts;
 
-namespace Api.Models;
+namespace Api.Models.Receipts;
 
 [Index(nameof(OwnerUserId), nameof(CreatedAt))]
 public class Receipt

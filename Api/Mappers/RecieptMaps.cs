@@ -1,7 +1,7 @@
 ﻿using Api.Dtos.Receipts.Requests;
 using Api.Dtos.Receipts.Responses;
-using Api.Models;
 using Api.Abstractions.Receipts;
+using Api.Models.Receipts;
 
 namespace Api.Mappers;
 

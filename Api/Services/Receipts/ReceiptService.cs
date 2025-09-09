@@ -8,6 +8,7 @@ using Api.Dtos.Receipts.Responses.Items;
 using Api.Infrastructure.Interfaces;
 using Api.Mappers;
 using Api.Models;
+using Api.Models.Receipts;
 using Api.Options;
 using Api.Services.Receipts.Abstractions;
 using Azure.Storage.Blobs;

@@ -1,5 +1,6 @@
 using Api.Abstractions.Receipts;
 using Api.Data;
+using Api.Models.Receipts;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -32,7 +33,7 @@ public static class TestConfiguration
         var context = CreateTestDbContext();
 
         // Add some test data
-        var receipts = new List<Api.Models.Receipt>
+        var receipts = new List<Receipt>
         {
             TestHelpers.CreateTestReceipt(status: ReceiptStatus.Parsed),
             TestHelpers.CreateTestReceipt(status: ReceiptStatus.PendingParse),

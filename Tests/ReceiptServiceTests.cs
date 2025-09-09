@@ -8,6 +8,7 @@ using Api.Dtos.Receipts.Requests.Items;
 using Api.Dtos.Receipts.Responses.Items;
 using Api.Infrastructure.Interfaces;
 using Api.Mappers;
+using Api.Models.Receipts;
 using Api.Options;
 using Api.Services.Receipts;
 using Api.Services.Receipts.Abstractions;
@@ -212,7 +213,7 @@ public class ReceiptServiceTests : IDisposable
         {
             Id = Guid.NewGuid(),
             Status = ReceiptStatus.Parsed,
-            Items = new List<Api.Models.ReceiptItem>
+            Items = new List<ReceiptItem>
             {
                 new() { Label = "Test Item", Qty = 1, UnitPrice = 10m }
             }
@@ -245,7 +246,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task ListAsync_WithNoFilter_ShouldReturnAllReceipts()
     {
         // Arrange
-        var receipts = new List<Api.Models.Receipt>
+        var receipts = new List<Receipt>
         {
             new() { Id = Guid.NewGuid(), Status = ReceiptStatus.Parsed, CreatedAt = DateTimeOffset.UtcNow.AddDays(-1) },
             new() { Id = Guid.NewGuid(), Status = ReceiptStatus.Parsed, CreatedAt = DateTimeOffset.UtcNow }
@@ -265,7 +266,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task ListAsync_WithOwnerFilter_ShouldReturnFilteredReceipts()
     {
         // Arrange
-        var receipts = new List<Api.Models.Receipt>
+        var receipts = new List<Receipt>
         {
             new() { Id = Guid.NewGuid(), OwnerUserId = TestHelpers.TestConstants.TestUserId1, Status = ReceiptStatus.Parsed },
             new() { Id = Guid.NewGuid(), OwnerUserId = TestHelpers.TestConstants.TestUserId2, Status = ReceiptStatus.Parsed },
@@ -286,7 +287,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task ListAsync_WithPagination_ShouldRespectSkipAndTake()
     {
         // Arrange
-        var receipts = new List<Api.Models.Receipt>();
+        var receipts = new List<Receipt>();
         for (int i = 0; i < 5; i++)
         {
             receipts.Add(new Api.Models.Receipt
@@ -357,7 +358,7 @@ public class ReceiptServiceTests : IDisposable
         {
             Id = Guid.NewGuid(),
             Status = ReceiptStatus.PendingParse,
-            Items = new List<Api.Models.ReceiptItem>
+            Items = new List<ReceiptItem>
             {
                 new() { Label = "Test", Qty = 2, UnitPrice = 10m, LineSubtotal = 20m, LineTotal = 20m }
             }

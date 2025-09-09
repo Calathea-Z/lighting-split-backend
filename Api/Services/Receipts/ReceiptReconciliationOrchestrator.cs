@@ -4,6 +4,7 @@ using Api.Contracts.Reconciliation;
 using Api.Data;
 using Api.Mappers;
 using Api.Models;
+using Api.Models.Receipts;
 using Api.Services.Receipts.Abstractions;
 using Api.Services.Reconciliation.Abstractions;
 using Microsoft.EntityFrameworkCore;

@@ -5,6 +5,7 @@ using Api.Dtos.Receipts.Requests.Items;
 using Api.Dtos.Receipts.Responses.Items;
 using Api.Mappers;
 using Api.Models;
+using Api.Models.Receipts;
 using Api.Services.Receipts.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using System.Text.RegularExpressions;
