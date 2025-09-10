@@ -387,21 +387,30 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
         // Split Payment
         // =========================
 
-        // LightningDbContext.OnModelCreating add:
         b.Entity<SplitPayment>(e =>
         {
+            e.ToTable("SplitPayments");
             e.HasKey(x => x.Id);
-            e.HasIndex(x => new { x.SplitSessionId, x.ParticipantId }).IsUnique();
-            e.Property(x => x.PlatformKey).HasMaxLength(32);
-            e.Property(x => x.Note).HasMaxLength(256);
-            e.Property(x => x.Amount).HasPrecision(18, 2);
-            e.Property(x => x.CreatedAt).HasColumnType("timestamptz").HasDefaultValueSql("now()");
-            e.Property(x => x.UpdatedAt).HasColumnType("timestamptz").HasDefaultValueSql("now()");
 
             e.HasOne<SplitSession>()
              .WithMany()
              .HasForeignKey(x => x.SplitSessionId)
              .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasOne<SplitParticipant>()
+             .WithMany()
+             .HasForeignKey(x => x.ParticipantId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            // one row per (split, participant)
+            e.HasIndex(x => new { x.SplitSessionId, x.ParticipantId }).IsUnique();
+
+            e.Property(x => x.PlatformKey).HasMaxLength(32);
+            e.Property(x => x.Note).HasMaxLength(256);
+
+            // nice-to-have defaults (Postgres)
+            e.Property(x => x.CreatedAt).HasDefaultValueSql("now() at time zone 'utc'");
+            e.Property(x => x.UpdatedAt).HasDefaultValueSql("now() at time zone 'utc'");
         });
 
     }

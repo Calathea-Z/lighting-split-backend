@@ -1,4 +1,5 @@
 ﻿// Api/Controllers/ShareController.cs
+
 using Api.Dtos.Splits.Responses;
 using Api.Services.Payments.Abstractions;
 using Microsoft.AspNetCore.Mvc;
@@ -9,6 +10,7 @@ namespace Api.Controllers;
 [Route("s")]
 public sealed class ShareController(ISplitShareReader shareSplitReader) : ControllerBase
 {
+    // GET /s/{code}
     [HttpGet("{code}")]
     public async Task<ActionResult<ShareSplitResponseDto>> Get(string code)
     {

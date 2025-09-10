@@ -22,6 +22,7 @@ public sealed class ReceiptsController(IReceiptService receiptService) : Control
         return result is null ? NotFound() : Ok(result);
     }
 
+
     // GET /api/receipts?ownerUserId=...&skip=0&take=50
     [HttpGet]
     public async Task<ActionResult<IEnumerable<ReceiptSummaryDto>>> List(

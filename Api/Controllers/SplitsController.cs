@@ -1,4 +1,5 @@
 ﻿using Api.Data;
+using Api.Dtos.Splits.Common;
 using Api.Dtos.Splits.Requests;
 using Api.Dtos.Splits.Responses;
 using Api.Models.Splits;
@@ -21,13 +22,14 @@ public sealed class SplitsController : ControllerBase
 
     public SplitsController(LightningDbContext db, IAokService aok, ISplitCalculator calc, ISplitFinalizerService splitterFinalizerService, ISplitPaymentService splitPaymentService)
     {
-        _db = db; 
-        _aok = aok; 
+        _db = db;
+        _aok = aok;
         _calc = calc;
         _splitterFinalizerService = splitterFinalizerService;
         _splitPaymentService = splitPaymentService;
     }
 
+    // GET /api/splits/{id}/preview
     [HttpGet("{id:guid}/preview")]
     public async Task<ActionResult<SplitPreviewDto>> Preview([FromRoute] Guid id)
     {
@@ -42,6 +44,7 @@ public sealed class SplitsController : ControllerBase
         return Ok(dto);
     }
 
+    // POST /api/splits
     [HttpPost]
     public async Task<ActionResult<CreateSplitResponseDto>> Create([FromBody] CreateSplitDto req)
     {
@@ -65,6 +68,7 @@ public sealed class SplitsController : ControllerBase
         return Ok(new CreateSplitResponseDto(s.Id));
     }
 
+    // POST /api/splits/{id}/participants
     [HttpPost("{id:guid}/participants")]
     public async Task<IActionResult> AddParticipant([FromRoute] Guid id, [FromBody] CreateSplitParticipantDto req)
     {
@@ -86,6 +90,7 @@ public sealed class SplitsController : ControllerBase
         return NoContent();
     }
 
+    // POST /api/splits/{id}/claims
     [HttpPost("{id:guid}/claims")]
     public async Task<IActionResult> UpsertClaims([FromRoute] Guid id, [FromQuery] bool replace, [FromBody] UpsertItemClaimsDto req)
     {
@@ -94,6 +99,21 @@ public sealed class SplitsController : ControllerBase
 
         var s = await _db.SplitSessions.FirstOrDefaultAsync(x => x.Id == id && x.OwnerId == owner.Id);
         if (s is null) return NotFound();
+
+        // Normalize incoming list to a mutable list of ItemClaimDto
+        var incoming = (req?.Claims ?? Array.Empty<ItemClaimDto>()).ToList();
+
+        // Allow clearing all when replace=true and no claims provided
+        if (replace && incoming.Count == 0)
+        {
+            var toClear = await _db.ItemClaims.Where(x => x.SplitSessionId == s.Id).ToListAsync();
+            if (toClear.Count > 0)
+            {
+                _db.ItemClaims.RemoveRange(toClear);
+                await _db.SaveChangesAsync();
+            }
+            return NoContent();
+        }
 
         // Validate participants belong to split & items belong to receipt
         var partIds = await _db.SplitParticipants
@@ -106,7 +126,7 @@ public sealed class SplitsController : ControllerBase
             .Select(i => i.Id)
             .ToHashSetAsync();
 
-        foreach (var c in req.Claims)
+        foreach (var c in incoming)
         {
             if (!partIds.Contains(c.ParticipantId)) return BadRequest("Participant not in split.");
             if (!itemIds.Contains(c.ReceiptItemId)) return BadRequest("Item not in receipt.");
@@ -115,17 +135,24 @@ public sealed class SplitsController : ControllerBase
 
         if (replace)
         {
-            var existing = await _db.ItemClaims.Where(x => x.SplitSessionId == s.Id).ToListAsync();
-            _db.RemoveRange(existing);
+            var existingAll = await _db.ItemClaims.Where(x => x.SplitSessionId == s.Id).ToListAsync();
+            if (existingAll.Count > 0) _db.ItemClaims.RemoveRange(existingAll);
         }
 
-        // Upsert per (item, participant)
-        var keys = req.Claims.Select(c => new { c.ReceiptItemId, c.ParticipantId }).ToList();
-        var existingMap = await _db.ItemClaims
-            .Where(x => x.SplitSessionId == s.Id && keys.Contains(new { x.ReceiptItemId, x.ParticipantId }))
-            .ToDictionaryAsync(x => (x.ReceiptItemId, x.ParticipantId));
+        // EF-friendly lookup of existing (item, participant) pairs
+        var claimItemIds = incoming.Select(c => c.ReceiptItemId).Distinct().ToList();
+        var claimPartIds = incoming.Select(c => c.ParticipantId).Distinct().ToList();
 
-        foreach (var c in req.Claims)
+        var existing = await _db.ItemClaims
+            .Where(x => x.SplitSessionId == s.Id
+                && claimItemIds.Contains(x.ReceiptItemId)
+                && claimPartIds.Contains(x.ParticipantId))
+            .ToListAsync();
+
+        var existingMap = existing.ToDictionary(x => (x.ReceiptItemId, x.ParticipantId));
+
+        // Upsert rows
+        foreach (var c in incoming)
         {
             if (existingMap.TryGetValue((c.ReceiptItemId, c.ParticipantId), out var row))
             {
@@ -148,6 +175,8 @@ public sealed class SplitsController : ControllerBase
         return NoContent();
     }
 
+
+    // POST /api/splits/{id}/finalize
     [HttpPost("{id:guid}/finalize")]
     public async Task<ActionResult<FinalizeSplitResponse>> Finalize([FromRoute] Guid id)
     {
@@ -159,7 +188,7 @@ public sealed class SplitsController : ControllerBase
         return Ok(dto);
     }
 
-
+    // PATCH /api/splits/{id}/participants/{participantId}/payment
     [HttpPatch("{id:guid}/participants/{participantId:guid}/payment")]
     public async Task<IActionResult> SetPayment(
         [FromRoute] Guid id,
