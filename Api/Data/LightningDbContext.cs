@@ -22,7 +22,6 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
     public DbSet<SplitParticipantResult> SplitParticipantResults => Set<SplitParticipantResult>();
     public DbSet<SplitPayment> SplitPayments => Set<SplitPayment>();
 
-
     protected override void OnModelCreating(ModelBuilder b)
     {
         // =========================
@@ -167,10 +166,28 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
         b.Entity<Owner>(e =>
         {
             e.HasKey(x => x.Id);
-            e.Property(x => x.KeyHash).IsRequired().HasMaxLength(100);
-            e.HasIndex(x => x.KeyHash).IsUnique();
+
+            // HMAC-SHA256(base64url) of 32-byte token => 43 chars (no '=' padding)
+            e.Property(x => x.KeyHash)
+             .IsRequired()
+             .HasMaxLength(60);
+
+            // Timestamps
             e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
             e.Property(x => x.LastSeenAt).HasDefaultValueSql("now()");
+
+            // Helpful indexes
+            e.HasIndex(x => x.LastSeenAt);
+            e.HasIndex(x => x.CreatedAt);
+
+            // Keep a non-unique index for general lookup
+            e.HasIndex(x => x.KeyHash).HasDatabaseName("ix_owners_keyhash");
+
+            // Partial unique: only one ACTIVE row per KeyHash (RevokedAt is null)
+            e.HasIndex(x => x.KeyHash)
+             .IsUnique()
+             .HasFilter("\"RevokedAt\" IS NULL")
+             .HasDatabaseName("ux_owners_keyhash_active");
         });
 
         // =========================
@@ -291,11 +308,9 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             }
         );
 
-
         // =========================
         // Split Session
         // =========================
-
         b.Entity<SplitSession>(e =>
         {
             e.HasKey(x => x.Id);
@@ -325,7 +340,6 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
         // =========================
         // Split Participant
         // =========================
-
         b.Entity<SplitParticipant>(e =>
         {
             e.HasKey(x => x.Id);
@@ -341,8 +355,7 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
         // =========================
         // Item Claim
         // =========================
-
-        b.Entity<ItemClaim> (e =>
+        b.Entity<ItemClaim>(e =>
         {
             e.HasKey(x => x.Id);
             e.Property(x => x.QtyShare).HasPrecision(9, 3);
@@ -359,7 +372,6 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
         // =========================
         // Split Result
         // =========================
-
         b.Entity<SplitResult>(e =>
         {
             e.HasKey(x => x.Id);
@@ -370,7 +382,6 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
         // =========================
         // Split Participant Result
         // =========================
-
         b.Entity<SplitParticipantResult>(e =>
         {
             e.HasKey(x => x.Id);
@@ -386,7 +397,6 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
         // =========================
         // Split Payment
         // =========================
-
         b.Entity<SplitPayment>(e =>
         {
             e.ToTable("SplitPayments");
@@ -412,6 +422,5 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             e.Property(x => x.CreatedAt).HasDefaultValueSql("now() at time zone 'utc'");
             e.Property(x => x.UpdatedAt).HasDefaultValueSql("now() at time zone 'utc'");
         });
-
     }
 }

@@ -22,7 +22,7 @@ var builder = WebApplication.CreateBuilder(args);
 var cfg = builder.Configuration;
 var env = builder.Environment;
 
-// ---------- Options (typed + validated) ----------
+/* ---------- Options (typed + validated) ---------- */
 builder.Services
     .AddOptions<StorageOptions>().Bind(cfg.GetSection("Storage"))
     .ValidateDataAnnotations().ValidateOnStart();
@@ -32,16 +32,34 @@ builder.Services
     .ValidateDataAnnotations().ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<UploadOptions>, UploadOptionsValidator>();
 
+// AOK security (HMAC pepper)
+builder.Services
+    .AddOptions<AokSecurityOptions>()
+    .Bind(cfg.GetSection("AokSecurity"))
+    .Validate(o =>
+    {
+        try
+        {
+            var b64 = o.PepperBase64 ?? string.Empty;
+            var bytes = Convert.FromBase64String(b64);
+            return bytes.Length >= 32; // require >= 256-bit key
+        }
+        catch
+        {
+            return false;
+        }
+    }, "AokSecurity: PepperBase64 must be Base64 and at least 32 bytes (256-bit).")
+    .ValidateOnStart();
 
-// ---------- EF Core: PostgreSQL ----------
+/* ---------- EF Core: PostgreSQL ---------- */
 builder.Services.AddDbContext<LightningDbContext>(opts =>
     opts.UseNpgsql(cfg.GetConnectionString("Default")));
 
-// ---------- MVC ----------
+/* ---------- MVC ---------- */
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
 
-// ---------- CORS ----------
+/* ---------- CORS ---------- */
 const string CorsPolicy = "UiDev";
 builder.Services.AddCors(opt =>
 {
@@ -52,11 +70,11 @@ builder.Services.AddCors(opt =>
         .AllowAnyMethod());
 });
 
-// ---------- Swagger ----------
+/* ---------- Swagger ---------- */
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// ---------- Azure Storage (Blob + Queue) ----------
+/* ---------- Azure Storage (Blob + Queue) ---------- */
 string? storageConn =
     cfg.GetConnectionString("AzureStorage")
     ?? cfg["AzureStorage:ConnectionString"]
@@ -69,7 +87,7 @@ if (!string.IsNullOrWhiteSpace(storageConn))
     builder.Services.AddSingleton<IParseQueue, AzureBlobParseQueue>();
 }
 
-// ---------- App Services ----------
+/* ---------- App Services ---------- */
 builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
 builder.Services.AddSingleton<IClock, SystemClock>();
 
@@ -79,16 +97,15 @@ builder.Services.AddScoped<IReceiptReconciliationOrchestrator, ReceiptReconcilia
 builder.Services.AddScoped<IReceiptReconciliationCalculator, ReceiptReconciliationCalculator>();
 builder.Services.AddScoped<IPaymentLinkBuilder, PaymentLinkBuilder>();
 builder.Services.AddScoped<ISplitCalculator, SplitCalculator>();
-builder.Services.AddScoped<IAokService, AokService>();
+builder.Services.AddScoped<IAokService, AokService>(); // uses AokSecurityOptions (HMAC pepper)
 builder.Services.AddScoped<ISplitFinalizerService, SplitFinalizerService>();
 builder.Services.AddScoped<ISplitShareReader, SplitShareReader>();
 builder.Services.AddScoped<ISplitPaymentService, SplitPaymentService>();
 builder.Services.AddScoped<IShareCodeService, ShareCodeService>();
 
-
 var app = builder.Build();
 
-// ---------- Middleware pipeline ----------
+/* ---------- Middleware pipeline ---------- */
 if (env.IsDevelopment())
 {
     app.UseSwagger();
@@ -106,7 +123,7 @@ app.UseCors(CorsPolicy);
 
 app.MapControllers();
 
-// ---------- Static files (/uploads) ----------
+/* ---------- Static files (/uploads) ---------- */
 var uploadOpts = app.Services.GetRequiredService<IOptions<UploadOptions>>().Value;
 var uploadsAbs = Path.Combine(env.ContentRootPath, uploadOpts.RootFolder ?? "uploads");
 Directory.CreateDirectory(uploadsAbs);

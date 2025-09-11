@@ -1,8 +1,10 @@
 using Api.Data;
 using Api.Models.Owners;
+using Api.Options;
 using Api.Services.Payments;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Moq;
 using System.Collections;
 
@@ -12,6 +14,7 @@ namespace Tests
     {
         private readonly LightningDbContext _dbContext;
         private readonly AokService _service;
+        private readonly byte[] _testPepper;
 
         public AokServiceTests()
         {
@@ -21,7 +24,20 @@ namespace Tests
                 .Options;
 
             _dbContext = new LightningDbContext(options);
-            _service = new AokService(_dbContext);
+
+            // Create test pepper (256-bit minimum)
+            _testPepper = new byte[32];
+            new Random(42).NextBytes(_testPepper); // Deterministic for testing
+
+            var securityOptions = new AokSecurityOptions
+            {
+                PepperBase64 = Convert.ToBase64String(_testPepper)
+            };
+
+            var mockOptions = new Mock<IOptions<AokSecurityOptions>>();
+            mockOptions.Setup(x => x.Value).Returns(securityOptions);
+
+            _service = new AokService(_dbContext, mockOptions.Object);
         }
 
         public void Dispose()
@@ -51,7 +67,7 @@ namespace Tests
 
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)httpContext.Request.Cookies).Add("aok", token);
+            ((MockCookieCollection)httpContext.Request.Cookies).Add("__Host-aok", token);
 
             // Act
             var result = await _service.ResolveOwnerAsync(httpContext);
@@ -128,7 +144,7 @@ namespace Tests
 
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)httpContext.Request.Cookies).Add("aok", cookieToken);
+            ((MockCookieCollection)httpContext.Request.Cookies).Add("__Host-aok", cookieToken);
             httpContext.Request.Headers.Add("X-AOK", headerToken);
 
             // Act
@@ -160,7 +176,7 @@ namespace Tests
 
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)httpContext.Request.Cookies).Add("aok", token);
+            ((MockCookieCollection)httpContext.Request.Cookies).Add("__Host-aok", token);
 
             // Act
             var result = await _service.ResolveOwnerAsync(httpContext);
@@ -176,7 +192,7 @@ namespace Tests
             var token = "non-existent-token";
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)httpContext.Request.Cookies).Add("aok", token);
+            ((MockCookieCollection)httpContext.Request.Cookies).Add("__Host-aok", token);
 
             // Act
             var result = await _service.ResolveOwnerAsync(httpContext);
@@ -191,7 +207,7 @@ namespace Tests
             // Arrange
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)httpContext.Request.Cookies).Add("aok", "");
+            ((MockCookieCollection)httpContext.Request.Cookies).Add("__Host-aok", "");
 
             // Act
             var result = await _service.ResolveOwnerAsync(httpContext);
@@ -206,7 +222,7 @@ namespace Tests
             // Arrange
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)httpContext.Request.Cookies).Add("aok", "   ");
+            ((MockCookieCollection)httpContext.Request.Cookies).Add("__Host-aok", "   ");
 
             // Act
             var result = await _service.ResolveOwnerAsync(httpContext);
@@ -251,7 +267,7 @@ namespace Tests
 
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)httpContext.Request.Cookies).Add("aok", token);
+            ((MockCookieCollection)httpContext.Request.Cookies).Add("__Host-aok", token);
 
             // Act
             var result = await _service.ResolveOwnerAsync(httpContext);
@@ -281,7 +297,7 @@ namespace Tests
             var setCookieHeader = response.Headers["Set-Cookie"].ToString();
 
             // Verify cookie name
-            Assert.Contains("aok=", setCookieHeader);
+            Assert.Contains("__Host-aok=", setCookieHeader);
             Assert.Contains(rawToken, setCookieHeader);
 
             // Verify cookie options (case-insensitive check)
@@ -304,7 +320,7 @@ namespace Tests
             // Assert
             Assert.True(response.Headers.ContainsKey("Set-Cookie"));
             var setCookieHeader = response.Headers["Set-Cookie"].ToString();
-            Assert.Contains("aok=", setCookieHeader);
+            Assert.Contains("__Host-aok=", setCookieHeader);
         }
 
         [Fact]
@@ -395,7 +411,7 @@ namespace Tests
 
             var ctx = new DefaultHttpContext();
             ctx.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)ctx.Request.Cookies).Add("aok", ""); // blank cookie
+            ((MockCookieCollection)ctx.Request.Cookies).Add("__Host-aok", ""); // blank cookie
             ctx.Request.Headers.Add("X-AOK", headerToken);
 
             // Act
@@ -424,7 +440,7 @@ namespace Tests
 
             var ctx = new DefaultHttpContext();
             ctx.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)ctx.Request.Cookies).Add("aok", cookieToken);
+            ((MockCookieCollection)ctx.Request.Cookies).Add("__Host-aok", cookieToken);
             ctx.Request.Headers.Add("X-AOK", "   "); // whitespace header
 
             // Act
@@ -454,7 +470,7 @@ namespace Tests
 
             var ctx = new DefaultHttpContext();
             ctx.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)ctx.Request.Cookies).Add("aok", "unknown-cookie-token"); // invalid cookie present
+            ((MockCookieCollection)ctx.Request.Cookies).Add("__Host-aok", "unknown-cookie-token"); // invalid cookie present
             ctx.Request.Headers.Add("X-AOK", headerToken); // would match, but should be ignored due to cookie presence
 
             // Act
@@ -482,7 +498,7 @@ namespace Tests
 
             var ctx = new DefaultHttpContext();
             ctx.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)ctx.Request.Cookies).Add("aok", token);
+            ((MockCookieCollection)ctx.Request.Cookies).Add("__Host-aok", token);
             ctx.Request.Headers.Add("X-AOK", token);
 
             // Act
@@ -521,6 +537,87 @@ namespace Tests
         }
 
         [Fact]
+        public async Task ResolveOwnerAsync_WithBearerToken_ReturnsOwner()
+        {
+            // Arrange
+            var token = "bearer-token";
+            var hash = HashToken(token);
+            var owner = new Owner
+            {
+                Id = Guid.NewGuid(),
+                KeyHash = hash,
+                CreatedAt = DateTimeOffset.UtcNow,
+                LastSeenAt = DateTimeOffset.UtcNow.AddDays(-1)
+            };
+            _dbContext.Owners.Add(owner);
+            await _dbContext.SaveChangesAsync();
+
+            var ctx = new DefaultHttpContext();
+            ctx.Request.Headers.Add("Authorization", $"Bearer {token}");
+
+            // Act
+            var result = await _service.ResolveOwnerAsync(ctx);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal(owner.Id, result.Id);
+        }
+
+        [Fact]
+        public async Task ResolveOwnerAsync_WithBearerTokenCaseInsensitive_ReturnsOwner()
+        {
+            // Arrange
+            var token = "bearer-case-insensitive";
+            var hash = HashToken(token);
+            var owner = new Owner
+            {
+                Id = Guid.NewGuid(),
+                KeyHash = hash,
+                CreatedAt = DateTimeOffset.UtcNow,
+                LastSeenAt = DateTimeOffset.UtcNow.AddDays(-1)
+            };
+            _dbContext.Owners.Add(owner);
+            await _dbContext.SaveChangesAsync();
+
+            var ctx = new DefaultHttpContext();
+            ctx.Request.Headers.Add("Authorization", $"bearer {token}"); // lowercase "bearer"
+
+            // Act
+            var result = await _service.ResolveOwnerAsync(ctx);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal(owner.Id, result.Id);
+        }
+
+        [Fact]
+        public async Task ResolveOwnerAsync_WithBearerTokenWhitespace_TrimsToken()
+        {
+            // Arrange
+            var token = "bearer-trimmed";
+            var hash = HashToken(token);
+            var owner = new Owner
+            {
+                Id = Guid.NewGuid(),
+                KeyHash = hash,
+                CreatedAt = DateTimeOffset.UtcNow,
+                LastSeenAt = DateTimeOffset.UtcNow.AddDays(-1)
+            };
+            _dbContext.Owners.Add(owner);
+            await _dbContext.SaveChangesAsync();
+
+            var ctx = new DefaultHttpContext();
+            ctx.Request.Headers.Add("Authorization", $"Bearer  {token}  "); // extra whitespace
+
+            // Act
+            var result = await _service.ResolveOwnerAsync(ctx);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal(owner.Id, result.Id);
+        }
+
+        [Fact]
         public async Task ResolveOwnerAsync_TwoResolves_LastSeenMonotonic()
         {
             // Arrange
@@ -538,7 +635,7 @@ namespace Tests
 
             var ctx = new DefaultHttpContext();
             ctx.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)ctx.Request.Cookies).Add("aok", token);
+            ((MockCookieCollection)ctx.Request.Cookies).Add("__Host-aok", token);
 
             // Act
             var first = await _service.ResolveOwnerAsync(ctx);
@@ -559,7 +656,7 @@ namespace Tests
             // Arrange
             var ctx = new DefaultHttpContext();
             ctx.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)ctx.Request.Cookies).Add("aok", "no-match");
+            ((MockCookieCollection)ctx.Request.Cookies).Add("__Host-aok", "no-match");
 
             // Act
             var result = await _service.ResolveOwnerAsync(ctx);
@@ -589,7 +686,7 @@ namespace Tests
 
             var ctx = new DefaultHttpContext();
             ctx.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)ctx.Request.Cookies).Add("aok", token);
+            ((MockCookieCollection)ctx.Request.Cookies).Add("__Host-aok", token);
 
             var result = await _service.ResolveOwnerAsync(ctx);
 
@@ -605,9 +702,9 @@ namespace Tests
             Assert.True(ctx.Response.Headers.ContainsKey("Set-Cookie"));
             var header = ctx.Response.Headers["Set-Cookie"].ToString().ToLowerInvariant();
 
-            Assert.Contains("aok=", header);
-            Assert.Contains("path=/", header); // ensure scoped to site root
-                                               // Already checked elsewhere: httponly/secure/samesite
+            Assert.Contains("__host-aok=", header);
+            Assert.Contains("path=/", header);
+            Assert.DoesNotContain("domain=", header); // __Host- must NOT have Domain
         }
 
         [Fact]
@@ -629,7 +726,7 @@ namespace Tests
 
             var ctx = new DefaultHttpContext();
             ctx.Request.Cookies = new MockCookieCollection();
-            ((MockCookieCollection)ctx.Request.Cookies).Add("aok", spaced);
+            ((MockCookieCollection)ctx.Request.Cookies).Add("__Host-aok", spaced);
 
             // Act
             var result = await _service.ResolveOwnerAsync(ctx);
@@ -639,13 +736,50 @@ namespace Tests
             Assert.Null(result);
         }
 
+        [Fact]
+        public void SetAokCookie_SetsTtlHeaders()
+        {
+            var ctx = new DefaultHttpContext();
+            _service.SetAokCookie(ctx.Response, "tok");
+
+            var h = ctx.Response.Headers["Set-Cookie"].ToString().ToLowerInvariant();
+            Assert.Contains("max-age=", h);
+            Assert.Contains("expires=", h);
+        }
+
+        [Fact]
+        public async Task ResolveOwnerAsync_WhitespaceCookie_ValidHeader_UsesHeader()
+        {
+            var headerToken = "hdr-ok";
+            var headerHash = HashToken(headerToken);
+            _dbContext.Owners.Add(new Owner
+            {
+                Id = Guid.NewGuid(),
+                KeyHash = headerHash,
+                CreatedAt = DateTimeOffset.UtcNow,
+                LastSeenAt = DateTimeOffset.UtcNow.AddDays(-1)
+            });
+            await _dbContext.SaveChangesAsync();
+
+            var ctx = new DefaultHttpContext();
+            ctx.Request.Cookies = new MockCookieCollection();
+            ((MockCookieCollection)ctx.Request.Cookies).Add("__Host-aok", "   "); // whitespace
+            ctx.Request.Headers.Add("X-AOK", headerToken);
+
+            var result = await _service.ResolveOwnerAsync(ctx);
+            Assert.NotNull(result);
+            Assert.Equal(headerHash, result!.KeyHash);
+        }
+
+
 
         // Helper method to replicate the private HashToken method for testing
-        private static string HashToken(string token)
+        private string HashToken(string token)
         {
-            var bytes = System.Text.Encoding.UTF8.GetBytes(token);
-            var hash = System.Security.Cryptography.SHA256.HashData(bytes);
-            return Convert.ToBase64String(hash)
+            var data = System.Text.Encoding.UTF8.GetBytes(token);
+            using var hmac = new System.Security.Cryptography.HMACSHA256(_testPepper);
+            var mac = hmac.ComputeHash(data);
+            return Convert.ToBase64String(mac)
                 .TrimEnd('=').Replace('+', '-').Replace('/', '_'); // base64url
         }
     }
