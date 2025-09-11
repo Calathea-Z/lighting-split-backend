@@ -92,7 +92,7 @@ public sealed class SplitFinalizerService : ISplitFinalizerService
         return new FinalizeSplitResponse(
             split.Id,
             split.ShareCode!,
-            $"{baseUrl}/s/{split.ShareCode}",
+            JoinBase(baseUrl, split.ShareCode!),
             participants
         );
     }
@@ -118,5 +118,8 @@ public sealed class SplitFinalizerService : ISplitFinalizerService
             if (!exists) return code;
         }
     }
+
+    private static string JoinBase(string baseUrl, string code)
+    => $"{baseUrl.TrimEnd('/')}/s/{code}";
 
 }
