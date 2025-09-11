@@ -4,6 +4,7 @@ using Api.Models;
 using Api.Models.Owners;
 using Api.Services.Payments.Abstractions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using System.Globalization;
 using System.Text.RegularExpressions;
 
@@ -12,7 +13,13 @@ namespace Api.Services.Payments;
 public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
 {
     private readonly LightningDbContext _db;
-    public PaymentLinkBuilder(LightningDbContext db) => _db = db;
+    private readonly ILogger<PaymentLinkBuilder> _log;
+
+    public PaymentLinkBuilder(ILogger<PaymentLinkBuilder> log, LightningDbContext db)
+    {
+        _db = db;
+        _log = log;
+    }
 
     public async Task<PaymentLink> BuildAsync(OwnerPayoutMethod method, decimal amount, string note)
     {
@@ -26,7 +33,7 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
 
         var platform = method.Platform;
 
-        // Instructions-only (e.g., Zelle/Apple Cash): no URL
+        // Instructions-only (e.g., Zelle/Apple Cash)
         if (platform.LinkTemplate is null || platform.IsInstructionsOnly)
         {
             return new PaymentLink(
@@ -40,7 +47,7 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
             );
         }
 
-        // Build from template
+        // Build from template (may throw on invalid handle -> caller catches)
         var handle = NormalizeHandle(platform, method.HandleOrUrl);
         var url = BuildFromTemplate(platform, handle, amount, note);
 
@@ -57,8 +64,8 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
 
     public async Task<IReadOnlyList<PaymentLink>> BuildManyAsync(IEnumerable<OwnerPayoutMethod> methods, decimal amount, string note)
     {
+        // Load missing platforms
         var list = methods.ToList();
-
         var missing = list.Where(m => m.Platform == null).Select(m => m.Id).ToList();
         if (missing.Count > 0)
         {
@@ -73,9 +80,28 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
                     list[i] = repl;
         }
 
+        // Build safely: skip invalid methods instead of throwing
         var results = new List<PaymentLink>(list.Count);
         foreach (var m in list)
-            results.Add(await BuildAsync(m, amount, note));
+        {
+            try
+            {
+                var link = await BuildAsync(m, amount, note);
+                if (link is not null) results.Add(link);
+            }
+            catch (ArgumentException ex)
+            {
+                _log.LogWarning(ex,
+                    "Skipping payout method {MethodId} for platform {PlatformKey} due to validation error (handle/url).",
+                    m.Id, m.Platform?.Key);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex,
+                    "Error building link for payout method {MethodId} (platform {PlatformKey}); skipping.",
+                    m.Id, m.Platform?.Key);
+            }
+        }
         return results;
     }
 
@@ -89,17 +115,15 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
         string encodedHandle = Uri.EscapeDataString(handle);
         string encodedNote = platform.SupportsNote ? Uri.EscapeDataString(note ?? string.Empty) : "";
 
-        // Replace placeholders
         template = template
             .Replace("{handle}", encodedHandle, StringComparison.Ordinal)
             .Replace("${handle}", "$" + encodedHandle, StringComparison.Ordinal)
             .Replace("{amount}", amt, StringComparison.Ordinal)
             .Replace("{note}", encodedNote, StringComparison.Ordinal);
 
-        // Clean query params left empty (e.g., "&note=" or "?note=")
-        template = Regex.Replace(template, @"([?&])[A-Za-z0-9._~-]+=(?=(&|$))", m => m.Groups[1].Value == "?" ? "?" : "");
-
-        // Collapse ?& → ?, && → &, and trim trailing ?/&
+        // Remove empty query params, collapse, trim
+        template = Regex.Replace(template, @"([?&])[A-Za-z0-9._~-]+=(?=(&|$))",
+                                 m => m.Groups[1].Value == "?" ? "?" : "");
         template = template.Replace("?&", "?", StringComparison.Ordinal)
                            .Replace("&&", "&", StringComparison.Ordinal)
                            .TrimEnd('?', '&', '/');
@@ -111,24 +135,23 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
     {
         var s = (raw ?? string.Empty).Trim();
 
-        if (!string.IsNullOrEmpty(platform.PrefixToStrip))
+        if (!string.IsNullOrEmpty(platform.PrefixToStrip) &&
+            s.StartsWith(platform.PrefixToStrip, StringComparison.OrdinalIgnoreCase))
         {
-            if (s.StartsWith(platform.PrefixToStrip, StringComparison.OrdinalIgnoreCase))
-                s = s[platform.PrefixToStrip.Length..];
+            s = s[platform.PrefixToStrip.Length..];
         }
 
-        if (!string.IsNullOrWhiteSpace(platform.HandlePattern))
+        if (!string.IsNullOrWhiteSpace(platform.HandlePattern) &&
+            !Regex.IsMatch(s, platform.HandlePattern))
         {
-            if (!Regex.IsMatch(s, platform.HandlePattern))
-                throw new ArgumentException($"Handle does not match pattern for {platform.DisplayName}.");
+            throw new ArgumentException($"Handle does not match pattern for {platform.DisplayName}.");
         }
 
-        // For Custom URL, template is "{handle}" so s must be an absolute https URL
+        // 'custom' expects a full https URL in HandleOrUrl
         if (platform.Key == "custom")
         {
             if (!Uri.TryCreate(s, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
                 throw new ArgumentException("Custom URL must be an absolute https URL.");
-            // Return the original (not encoded) so replacement keeps https:// intact
             return uri.ToString();
         }
 

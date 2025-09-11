@@ -25,6 +25,7 @@ public sealed class SplitShareReader : ISplitShareReader
         var split = await _db.SplitSessions
             .AsNoTracking()
             .FirstOrDefaultAsync(s => s.ShareCode == code && s.IsFinalized);
+
         if (split is null) throw new KeyNotFoundException("Share code not found.");
 
         var result = await _db.SplitResults

@@ -188,6 +188,40 @@ public sealed class SplitsController : ControllerBase
         return Ok(dto);
     }
 
+    // POST /api/splits/{id}/share/rotate
+    [HttpPost("{id:guid}/share/rotate")]
+    public async Task<ActionResult<object>> RotateShare([FromRoute] Guid id, [FromServices] IShareCodeService codes)
+    {
+        var owner = await _aok.ResolveOwnerAsync(HttpContext);
+        if (owner is null) return Unauthorized();
+
+        var s = await _db.SplitSessions.FirstOrDefaultAsync(x => x.Id == id && x.OwnerId == owner.Id);
+        if (s is null) return NotFound();
+
+        s.ShareCode = await codes.GenerateUniqueAsync();
+        s.UpdatedAt = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync();
+
+        var baseUrl = $"{Request.Scheme}://{Request.Host}";
+        return Ok(new { shareCode = s.ShareCode, shareUrl = $"{baseUrl}/s/{s.ShareCode}" });
+    }
+
+    // POST /api/splits/{id}/share/revoke
+    [HttpPost("{id:guid}/share/revoke")]
+    public async Task<IActionResult> RevokeShare([FromRoute] Guid id)
+    {
+        var owner = await _aok.ResolveOwnerAsync(HttpContext);
+        if (owner is null) return Unauthorized();
+
+        var s = await _db.SplitSessions.FirstOrDefaultAsync(x => x.Id == id && x.OwnerId == owner.Id);
+        if (s is null) return NotFound();
+
+        s.ShareCode = null;
+        s.UpdatedAt = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync();
+        return NoContent();
+    }
+
     // PATCH /api/splits/{id}/participants/{participantId}/payment
     [HttpPatch("{id:guid}/participants/{participantId:guid}/payment")]
     public async Task<IActionResult> SetPayment(

@@ -83,6 +83,8 @@ builder.Services.AddScoped<IAokService, AokService>();
 builder.Services.AddScoped<ISplitFinalizerService, SplitFinalizerService>();
 builder.Services.AddScoped<ISplitShareReader, SplitShareReader>();
 builder.Services.AddScoped<ISplitPaymentService, SplitPaymentService>();
+builder.Services.AddScoped<IShareCodeService, ShareCodeService>();
+
 
 var app = builder.Build();
 
