@@ -6,6 +6,7 @@ using Api.Services.Payments.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
+using System.Net;
 using System.Text.RegularExpressions;
 
 namespace Api.Services.Payments;
@@ -111,9 +112,14 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
     {
         var template = platform.LinkTemplate ?? "{handle}";
 
-        string amt = platform.SupportsAmount ? amount.ToString("0.00", CultureInfo.InvariantCulture) : "";
-        string encodedHandle = Uri.EscapeDataString(handle);
-        string encodedNote = platform.SupportsNote ? Uri.EscapeDataString(note ?? string.Empty) : "";
+        string amt = platform.SupportsAmount
+            ? amount.ToString("0.00", CultureInfo.InvariantCulture)
+            : "";
+
+        string encodedHandle = WebUtility.UrlEncode(handle);
+        string encodedNote = platform.SupportsNote
+            ? WebUtility.UrlEncode(note ?? string.Empty)
+            : "";
 
         template = template
             .Replace("{handle}", encodedHandle, StringComparison.Ordinal)
@@ -130,6 +136,7 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
 
         return template;
     }
+
 
     private static string NormalizeHandle(PayoutPlatform platform, string raw)
     {

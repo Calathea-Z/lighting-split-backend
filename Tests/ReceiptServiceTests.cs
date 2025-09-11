@@ -209,7 +209,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task GetByIdAsync_WithExistingReceipt_ShouldReturnReceipt()
     {
         // Arrange
-        var receipt = new Api.Models.Receipt
+        var receipt = new Receipt
         {
             Id = Guid.NewGuid(),
             Status = ReceiptStatus.Parsed,
@@ -290,7 +290,7 @@ public class ReceiptServiceTests : IDisposable
         var receipts = new List<Receipt>();
         for (int i = 0; i < 5; i++)
         {
-            receipts.Add(new Api.Models.Receipt
+            receipts.Add(new Receipt
             {
                 Id = Guid.NewGuid(),
                 Status = ReceiptStatus.Parsed,
@@ -311,7 +311,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task DeleteAsync_WithExistingReceipt_ShouldDeleteReceipt()
     {
         // Arrange
-        var receipt = new Api.Models.Receipt
+        var receipt = new Receipt
         {
             Id = Guid.NewGuid(),
             Status = ReceiptStatus.Parsed,
@@ -354,7 +354,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task UpdateTotalsAsync_WithExistingReceipt_ShouldUpdateTotals()
     {
         // Arrange
-        var receipt = new Api.Models.Receipt
+        var receipt = new Receipt
         {
             Id = Guid.NewGuid(),
             Status = ReceiptStatus.PendingParse,
@@ -397,7 +397,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task MarkParseFailedAsync_WithExistingReceipt_ShouldMarkAsFailed()
     {
         // Arrange
-        var receipt = new Api.Models.Receipt
+        var receipt = new Receipt
         {
             Id = Guid.NewGuid(),
             Status = ReceiptStatus.PendingParse
@@ -431,7 +431,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task UpdateRawTextAsync_WithExistingReceipt_ShouldUpdateRawText()
     {
         // Arrange
-        var receipt = new Api.Models.Receipt
+        var receipt = new Receipt
         {
             Id = Guid.NewGuid(),
             Status = ReceiptStatus.Parsed
@@ -468,7 +468,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task UpdateStatusAsync_WithExistingReceipt_ShouldUpdateStatus()
     {
         // Arrange
-        var receipt = new Api.Models.Receipt
+        var receipt = new Receipt
         {
             Id = Guid.NewGuid(),
             Status = ReceiptStatus.Parsed
@@ -506,7 +506,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task UpdateReviewAsync_WithExistingReceipt_ShouldUpdateReviewStatus()
     {
         // Arrange
-        var receipt = new Api.Models.Receipt
+        var receipt = new Receipt
         {
             Id = Guid.NewGuid(),
             Status = ReceiptStatus.Parsed,
@@ -544,7 +544,7 @@ public class ReceiptServiceTests : IDisposable
     public async Task UpdateParseMetaAsync_WithExistingReceipt_ShouldUpdateParseMeta()
     {
         // Arrange
-        var receipt = new Api.Models.Receipt
+        var receipt = new Receipt
         {
             Id = Guid.NewGuid(),
             Status = ReceiptStatus.Parsed

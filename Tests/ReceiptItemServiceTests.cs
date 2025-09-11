@@ -5,6 +5,7 @@ using Api.Data;
 using Api.Dtos.Receipts.Requests.Items;
 using Api.Dtos.Receipts.Responses.Items;
 using Api.Models;
+using Api.Models.Receipts;
 using Api.Services.Receipts;
 using Api.Services.Receipts.Abstractions;
 using Microsoft.EntityFrameworkCore;

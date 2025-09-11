@@ -8,45 +8,6 @@ namespace Tests;
 
 public static class TestHelpers
 {
-    public static CreateReceiptDto CreateValidReceiptDto()
-    {
-        return new CreateReceiptDto
-        {
-            Items = new List<CreateReceiptItemRequest>
-            {
-                new(
-                    Label: "Test Item 1",
-                    Qty: 2,
-                    UnitPrice: 10.50m,
-                    Unit: "ea",
-                    Category: "Food",
-                    Notes: "Test notes"
-                ),
-                new(
-                    Label: "Test Item 2",
-                    Qty: 1,
-                    UnitPrice: 5.25m,
-                    Discount: 1.00m,
-                    Tax: 0.50m
-                )
-            }
-        };
-    }
-
-    public static CreateReceiptItemRequest CreateValidReceiptItemRequest()
-    {
-        return new CreateReceiptItemRequest(
-            Label: "Test Item",
-            Qty: 3,
-            UnitPrice: 7.50m,
-            Unit: "lb",
-            Category: "Produce",
-            Notes: "Fresh produce",
-            Discount: 2.00m,
-            Tax: 1.25m
-        );
-    }
-
     public static Receipt CreateTestReceipt(Guid? id = null, ReceiptStatus? status = null)
     {
         return new Receipt
@@ -86,27 +47,6 @@ public static class TestHelpers
         };
     }
 
-    public static ReceiptItem CreateTestReceiptItem(Guid receiptId, Guid? id = null)
-    {
-        return new ReceiptItem
-        {
-            Id = id ?? Guid.NewGuid(),
-            ReceiptId = receiptId,
-            Label = TestConstants.TestItemLabel,
-            Qty = 2,
-            UnitPrice = 10.00m,
-            Unit = "ea",
-            Category = TestConstants.TestCategory,
-            Notes = TestConstants.TestNotes,
-            Position = 0,
-            LineSubtotal = 20.00m,
-            Tax = 2.00m,
-            LineTotal = 22.00m,
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow
-        };
-    }
-
     public static UpdateTotalsRequest CreateValidUpdateTotalsRequest()
     {
         return new UpdateTotalsRequest(30.00m, 3.00m, 6.00m, 39.00m);
@@ -115,11 +55,6 @@ public static class TestHelpers
     public static UpdateRawTextRequest CreateValidUpdateRawTextRequest()
     {
         return new UpdateRawTextRequest("Updated raw text content");
-    }
-
-    public static UpdateStatusRequest CreateValidUpdateStatusRequest()
-    {
-        return new UpdateStatusRequest(ReceiptStatus.Parsed);
     }
 
     public static UpdateParseMetaRequest CreateValidUpdateParseMetaRequest()
@@ -148,20 +83,6 @@ public static class TestHelpers
         );
     }
 
-    public static UpdateReceiptItemRequest CreateValidUpdateReceiptItemRequest()
-    {
-        return new UpdateReceiptItemRequest(
-            Label: "Updated Item",
-            Qty: 3,
-            UnitPrice: 12.00m,
-            Unit: "ea",
-            Category: "Updated Category",
-            Notes: "Updated notes",
-            Position: 1,
-            Version: 1
-        );
-    }
-
     public static UpdateReceiptItemDto CreateValidUpdateReceiptItemDto(uint version = 1)
     {
         return new UpdateReceiptItemDto
@@ -175,26 +96,6 @@ public static class TestHelpers
             Discount = 3.00m,
             Tax = 2.50m,
             Version = version
-        };
-    }
-
-    public static class TestData
-    {
-        public static readonly List<string> ValidStatuses = new()
-        {
-            "PendingParse",
-            "Parsed",
-            "FailedParse"
-        };
-
-        public static readonly List<string> ValidUnits = new()
-        {
-            "ea", "lb", "oz", "kg", "g", "l", "ml", "pkg", "box"
-        };
-
-        public static readonly List<string> ValidCategories = new()
-        {
-            "Food", "Beverages", "Household", "Electronics", "Clothing", "Produce", "Dairy", "Meat"
         };
     }
 
