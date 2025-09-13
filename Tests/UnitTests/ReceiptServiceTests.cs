@@ -1,24 +1,18 @@
 using Api.Abstractions.Receipts;
 using Api.Abstractions.Transport;
 using Api.Common.Interfaces;
-using Api.Contracts.Reconciliation;
 using Api.Data;
 using Api.Dtos.Receipts.Requests;
-using Api.Dtos.Receipts.Requests.Items;
-using Api.Dtos.Receipts.Responses.Items;
 using Api.Infrastructure.Interfaces;
-using Api.Mappers;
 using Api.Models.Receipts;
 using Api.Options;
 using Api.Services.Receipts;
 using Api.Services.Receipts.Abstractions;
 using Azure.Storage.Blobs;
-using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using System.ComponentModel.DataAnnotations;
 
-namespace Tests;
+namespace Tests.UnitTests;
 
 public class ReceiptServiceTests : IDisposable
 {

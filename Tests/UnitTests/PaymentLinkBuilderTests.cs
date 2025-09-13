@@ -1,17 +1,13 @@
-using System;
 using System.Globalization;
 using System.Net;
-using FluentAssertions;
-using Api.Contracts.Payment;
 using Api.Data;
 using Api.Models;
 using Api.Models.Owners;
 using Api.Services.Payments;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Moq;
 
-namespace Tests
+namespace Tests.UnitTests
 {
     public class PaymentLinkBuilderUnitTests : IDisposable
     {

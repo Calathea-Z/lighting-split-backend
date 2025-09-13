@@ -1,16 +1,13 @@
 using Api.Contracts.Payment;
 using Api.Data;
-using Api.Dtos.Splits.Responses;
 using Api.Models;
 using Api.Models.Owners;
-using Api.Models.Receipts;
 using Api.Models.Splits;
 using Api.Services.Payments;
 using Api.Services.Payments.Abstractions;
 using Microsoft.EntityFrameworkCore;
-using Moq;
 
-namespace Tests
+namespace Tests.UnitTests
 {
     public class SplitShareReaderTests : IDisposable
     {

@@ -13,7 +13,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
-namespace Tests;
+namespace Tests.UnitTests;
 
 public class ReceiptServiceUploadTests : IDisposable
 {

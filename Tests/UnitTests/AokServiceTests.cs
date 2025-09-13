@@ -5,10 +5,9 @@ using Api.Services.Payments;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Moq;
 using System.Collections;
 
-namespace Tests
+namespace Tests.UnitTests
 {
     public class AokServiceTests : IDisposable
     {

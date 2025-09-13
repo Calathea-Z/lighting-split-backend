@@ -3,7 +3,7 @@ using Api.Models.Splits;
 using Api.Services.Payments;
 using Microsoft.EntityFrameworkCore;
 
-namespace Tests
+namespace Tests.UnitTests
 {
     public class ShareCodeServiceTests : IDisposable
     {

@@ -4,7 +4,7 @@ using Api.Models.Receipts;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Tests;
+namespace Tests.UnitTests;
 
 public static class TestConfiguration
 {
