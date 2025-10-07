@@ -14,6 +14,7 @@ using Api.Services.Reconciliation;
 using Api.Services.Reconciliation.Abstractions;
 using Azure.Storage.Blobs;
 using Azure.Storage.Queues;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
@@ -44,10 +45,7 @@ builder.Services
             var bytes = Convert.FromBase64String(b64);
             return bytes.Length >= 32; // require >= 256-bit key
         }
-        catch
-        {
-            return false;
-        }
+        catch { return false; }
     }, "AokSecurity: PepperBase64 must be Base64 and at least 32 bytes (256-bit).")
     .ValidateOnStart();
 
@@ -63,11 +61,15 @@ builder.Services.AddProblemDetails();
 const string CorsPolicy = "UiDev";
 builder.Services.AddCors(opt =>
 {
-    var origins = cfg.GetSection("Cors:Origins").Get<string[]>() ?? new[] { "http://localhost:3000" };
+    var origins = cfg.GetSection("Cors:Origins").Get<string[]>()
+        ?? new[] { "http://localhost:3000", "https://localhost:3000" };
     opt.AddPolicy(CorsPolicy, p => p
         .WithOrigins(origins)
         .AllowAnyHeader()
-        .AllowAnyMethod());
+        .AllowAnyMethod()
+        // Enable if you later use cookies on the client (Axios withCredentials: true):
+        // .AllowCredentials()
+        );
 });
 
 /* ---------- Swagger ---------- */
@@ -103,6 +105,19 @@ builder.Services.AddScoped<ISplitShareReader, SplitShareReader>();
 builder.Services.AddScoped<ISplitPaymentService, SplitPaymentService>();
 builder.Services.AddScoped<IShareCodeService, ShareCodeService>();
 
+/* ---------- Multipart/form-data limits (global) ---------- */
+builder.Services.Configure<FormOptions>(o =>
+{
+    // Keep in sync with [RequestSizeLimit] where used
+    o.MultipartBodyLengthLimit = 20_000_000; // 20 MB
+});
+
+/* ---------- Kestrel request limits (optional) ---------- */
+builder.WebHost.ConfigureKestrel(o =>
+{
+    o.Limits.MaxRequestBodySize = 20_000_000; // 20 MB
+});
+
 var app = builder.Build();
 
 /* ---------- Middleware pipeline ---------- */
@@ -113,12 +128,17 @@ if (env.IsDevelopment())
 }
 else
 {
-    app.UseExceptionHandler();   // maps to ProblemDetails
+    app.UseExceptionHandler();
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+// Only use HTTPS redirection in production
+if (!env.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
+/* CORS before controllers */
 app.UseCors(CorsPolicy);
 
 app.MapControllers();

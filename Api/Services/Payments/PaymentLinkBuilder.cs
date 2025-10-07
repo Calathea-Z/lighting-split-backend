@@ -112,6 +112,19 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
     {
         var template = platform.LinkTemplate ?? "{handle}";
 
+        // Custom: return the validated absolute https URL unchanged.
+        if (platform.Key == "custom")
+            return handle;
+
+        // ✅ If the template adds a literal prefix like "$" via "${handle}",
+        // make sure the incoming handle doesn't already start with that.
+        if (template.Contains("${handle}", StringComparison.Ordinal))
+        {
+            handle = handle.TrimStart(' ', '+');
+            if (handle.StartsWith("$")) handle = handle[1..];
+            else if (handle.StartsWith("%24", StringComparison.OrdinalIgnoreCase)) handle = handle[3..];
+        }
+
         string amt = platform.SupportsAmount
             ? amount.ToString("0.00", CultureInfo.InvariantCulture)
             : "";
@@ -138,14 +151,31 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
     }
 
 
+
+
     private static string NormalizeHandle(PayoutPlatform platform, string raw)
     {
         var s = (raw ?? string.Empty).Trim();
 
-        if (!string.IsNullOrEmpty(platform.PrefixToStrip) &&
-            s.StartsWith(platform.PrefixToStrip, StringComparison.OrdinalIgnoreCase))
+        // Strip repeated copies of the logical prefix (e.g., "$") AND its URL-encoded form (e.g., "%24")
+        if (!string.IsNullOrEmpty(platform.PrefixToStrip))
         {
-            s = s[platform.PrefixToStrip.Length..];
+            var p = platform.PrefixToStrip;
+            var enc = WebUtility.UrlEncode(p); // "$" -> "%24"
+
+            // Remove leading '+' that might have come from accidental copies or URL-encoded spaces
+            while (s.Length > 0 && (s[0] == '+' || s[0] == ' ')) s = s[1..];
+
+            // Strip ALL leading raw prefixes
+            while (s.StartsWith(p, StringComparison.OrdinalIgnoreCase))
+                s = s[p.Length..];
+
+            // Strip ALL leading encoded prefixes (e.g., "%24username")
+            while (enc.Length > 0 && s.StartsWith(enc, StringComparison.OrdinalIgnoreCase))
+                s = s[enc.Length..];
+
+            // Re-trim in case we exposed spaces again
+            s = s.TrimStart();
         }
 
         if (!string.IsNullOrWhiteSpace(platform.HandlePattern) &&
@@ -164,5 +194,6 @@ public sealed class PaymentLinkBuilder : IPaymentLinkBuilder
 
         return s;
     }
+
     #endregion
 }

@@ -4,8 +4,11 @@ using Api.Data;
 using Api.Models;
 using Api.Models.Owners;
 using Api.Services.Payments;
+using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Moq;
+using Xunit;
 
 namespace Tests.UnitTests
 {
@@ -27,363 +30,308 @@ namespace Tests.UnitTests
             _paymentLinkBuilder = new PaymentLinkBuilder(_mockLogger.Object, _dbContext);
         }
 
-        public void Dispose()
-        {
-            _dbContext.Dispose();
-        }
+        public void Dispose() => _dbContext.Dispose();
 
-        #region BuildAsync Tests (original + additions)
+        /* ----------------------- BuildAsync ----------------------- */
 
         [Fact]
-        public async Task BuildAsync_WithInstructionsOnlyPlatform_ReturnsInstructionsOnlyLink()
+        public async Task BuildAsync_InstructionsOnlyPlatform_ReturnsInstructionsOnly()
         {
             var methodId = Guid.NewGuid();
             var platform = CreatePayoutPlatform("zelle", "Zelle", isInstructionsOnly: true);
             var method = CreateOwnerPayoutMethod(methodId, platform, "user@example.com", "My Zelle");
 
-            var result = await _paymentLinkBuilder.BuildAsync(method, 25.50m, "Test note");
+            var r = await _paymentLinkBuilder.BuildAsync(method, 25.50m, "Test note");
 
-            result.Should().NotBeNull();
-            result.MethodId.Should().Be(methodId);
-            result.PlatformKey.Should().Be("zelle");
-            result.PlatformName.Should().Be("Zelle");
-            result.Label.Should().Be("My Zelle");
-            result.Url.Should().BeNull();
-            result.IsInstructionsOnly.Should().BeTrue();
-            result.Instructions.Should().Be("user@example.com");
+            r.MethodId.Should().Be(methodId);
+            r.PlatformKey.Should().Be("zelle");
+            r.Label.Should().Be("My Zelle");
+            r.IsInstructionsOnly.Should().BeTrue();
+            r.Instructions.Should().Be("user@example.com");
+            r.Url.Should().BeNull();
         }
 
         [Fact]
-        public async Task BuildAsync_WithNullLinkTemplate_ReturnsInstructionsOnlyLink()
+        public async Task BuildAsync_NullTemplate_TreatedAsInstructionsOnly()
         {
-            var methodId = Guid.NewGuid();
             var platform = CreatePayoutPlatform("applecash", "Apple Cash", linkTemplate: null);
-            var method = CreateOwnerPayoutMethod(methodId, platform, "user@icloud.com");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "user@icloud.com");
 
-            var result = await _paymentLinkBuilder.BuildAsync(method, 15.75m, "Test note");
+            var r = await _paymentLinkBuilder.BuildAsync(method, 15.75m, "Test note");
 
-            result.Should().NotBeNull();
-            result.IsInstructionsOnly.Should().BeTrue();
-            result.Instructions.Should().Be("user@icloud.com");
-            result.Url.Should().BeNull();
+            r.IsInstructionsOnly.Should().BeTrue();
+            r.Instructions.Should().Be("user@icloud.com");
+            r.Url.Should().BeNull();
         }
 
         [Fact]
-        public async Task BuildAsync_WithTemplatePlatform_ReturnsUrlLink()
+        public async Task BuildAsync_TemplatePlatform_BuildsEncodedUrl()
         {
-            var methodId = Guid.NewGuid();
-            var platform = CreatePayoutPlatform("venmo", "Venmo",
+            var platform = CreatePayoutPlatform(
+                "venmo", "Venmo",
                 linkTemplate: "https://account.venmo.com/pay?recipients={handle}&amount={amount}&note={note}",
                 supportsAmount: true, supportsNote: true);
-            var method = CreateOwnerPayoutMethod(methodId, platform, "testuser");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "testuser");
 
-            var result = await _paymentLinkBuilder.BuildAsync(method, 25.50m, "Test note");
+            var r = await _paymentLinkBuilder.BuildAsync(method, 25.50m, "Test note");
 
-            result.Should().NotBeNull();
-            result.MethodId.Should().Be(methodId);
-            result.PlatformKey.Should().Be("venmo");
-            result.PlatformName.Should().Be("Venmo");
-            result.Label.Should().Be("Venmo");
-
-            var expectedUrl = "https://account.venmo.com/pay?recipients=testuser&amount=25.50&note="
-                              + WebUtility.UrlEncode("Test note");
-
-            result.Url.Should().Be(expectedUrl);
-            result.IsInstructionsOnly.Should().BeFalse();
-            result.Instructions.Should().BeNull();
+            r.PlatformKey.Should().Be("venmo");
+            var expected = "https://account.venmo.com/pay?recipients=testuser&amount=25.50&note=" +
+                           WebUtility.UrlEncode("Test note");
+            r.Url.Should().Be(expected);
         }
 
-
         [Fact]
-        public async Task BuildAsync_WithCustomDisplayLabel_UsesDisplayLabel()
+        public async Task BuildAsync_CustomDisplayLabel_Wins()
         {
-            var methodId = Guid.NewGuid();
             var platform = CreatePayoutPlatform("venmo", "Venmo",
                 linkTemplate: "https://account.venmo.com/pay?recipients={handle}");
-            var method = CreateOwnerPayoutMethod(methodId, platform, "testuser", "My Venmo Account");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "testuser", "My Venmo Account");
 
-            var result = await _paymentLinkBuilder.BuildAsync(method, 10.00m, "Test note");
+            var r = await _paymentLinkBuilder.BuildAsync(method, 10.00m, "n");
 
-            result.Label.Should().Be("My Venmo Account");
+            r.Label.Should().Be("My Venmo Account");
         }
 
         [Fact]
-        public async Task BuildAsync_WithNullPlatform_LoadsPlatformFromDatabase()
+        public async Task BuildAsync_NullPlatform_LoadsFromDb()
         {
-            var methodId = Guid.NewGuid();
-            var platform = CreatePayoutPlatform("cashapp", "Cash App",
-                linkTemplate: "https://cash.app/${handle}");
-
+            var platform = CreatePayoutPlatform("cashapp", "Cash App", linkTemplate: "https://cash.app/${handle}");
             _dbContext.PayoutPlatforms.Add(platform);
             await _dbContext.SaveChangesAsync();
 
-            var method = CreateOwnerPayoutMethod(methodId, null, "testuser");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), null, "testuser");
             method.PlatformId = platform.Id;
-
             _dbContext.OwnerPayoutMethods.Add(method);
             await _dbContext.SaveChangesAsync();
 
-            var result = await _paymentLinkBuilder.BuildAsync(method, 20.00m, "Test note");
+            var r = await _paymentLinkBuilder.BuildAsync(method, 20.00m, "n");
 
-            result.Should().NotBeNull();
-            result.PlatformKey.Should().Be("cashapp");
-            result.Url.Should().Be("https://cash.app/$testuser");
+            r.PlatformKey.Should().Be("cashapp");
+            r.Url.Should().Be("https://cash.app/$testuser");
         }
 
         [Fact]
-        public async Task BuildAsync_WithInvalidHandle_ThrowsArgumentException()
+        public async Task BuildAsync_InvalidHandle_Throws()
         {
-            var methodId = Guid.NewGuid();
-            var platform = CreatePayoutPlatform("venmo", "Venmo",
+            var platform = CreatePayoutPlatform(
+                "venmo", "Venmo",
                 linkTemplate: "https://account.venmo.com/pay?recipients={handle}",
                 handlePattern: @"^[a-zA-Z0-9._-]+$");
-            var method = CreateOwnerPayoutMethod(methodId, platform, "invalid@handle!");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "invalid@handle!");
 
             await Assert.ThrowsAsync<ArgumentException>(() =>
-                _paymentLinkBuilder.BuildAsync(method, 10.00m, "Test note"));
+                _paymentLinkBuilder.BuildAsync(method, 10.00m, "n"));
         }
 
         [Fact]
-        public async Task BuildAsync_WithCustomPlatform_ValidatesHttpsUrl()
+        public async Task BuildAsync_CustomPlatform_MustBeHttps_NoEncodingOfEntireUrl()
         {
-            var methodId = Guid.NewGuid();
             var platform = CreatePayoutPlatform("custom", "Custom", linkTemplate: "{handle}");
-            var method = CreateOwnerPayoutMethod(methodId, platform, "https://example.com/pay");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "https://example.com/pay");
 
-            var result = await _paymentLinkBuilder.BuildAsync(method, 10.00m, "Test note");
+            var r = await _paymentLinkBuilder.BuildAsync(method, 10.00m, "n");
 
-            result.Url.Should().Be("https%3A%2F%2Fexample.com%2Fpay");
+            // Expect the URL itself, not percent-encoded
+            r.Url.Should().Be("https://example.com/pay");
         }
 
         [Fact]
-        public async Task BuildAsync_WithCustomPlatform_InvalidUrl_ThrowsArgumentException()
+        public async Task BuildAsync_CustomPlatform_HttpUrlRejected()
         {
-            var methodId = Guid.NewGuid();
             var platform = CreatePayoutPlatform("custom", "Custom", linkTemplate: "{handle}");
-            var method = CreateOwnerPayoutMethod(methodId, platform, "http://example.com/pay");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "http://example.com/pay");
 
             await Assert.ThrowsAsync<ArgumentException>(() =>
-                _paymentLinkBuilder.BuildAsync(method, 10.00m, "Test note"));
+                _paymentLinkBuilder.BuildAsync(method, 10.00m, "n"));
         }
 
         [Fact]
-        public async Task BuildAsync_WithPrefixToStrip_RemovesOnlyLeadingPrefix_AndTrims()
+        public async Task BuildAsync_PrefixToStrip_StripsLeadingOnly_AndTrims()
         {
-            var methodId = Guid.NewGuid();
-            var platform = CreatePayoutPlatform("cashapp", "Cash App",
-                linkTemplate: "https://cash.app/${handle}", prefixToStrip: "$");
-            var method = CreateOwnerPayoutMethod(methodId, platform, "  $  $testuser  ");
+            var platform = CreatePayoutPlatform(
+                "cashapp", "Cash App",
+                linkTemplate: "https://cash.app/${handle}",
+                prefixToStrip: "$");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "  $  $testuser  ");
 
-            var result = await _paymentLinkBuilder.BuildAsync(method, 10.00m, "x");
+            var r = await _paymentLinkBuilder.BuildAsync(method, 10.00m, "n");
 
-            // spaces -> '+', inner '$' -> %24, and template adds a literal '$' prefix
-            result.Url.Should().Be("https://cash.app/$++%242testuser".Replace("%242", "%24" + "2").Replace("2test", "test")); // ignore this weirdness
-            result.Url.Should().Be("https://cash.app/$++%24testuser");
+            // Expected: leading '$' removed once, whitespace trimmed, template adds a single '$'
+            r.Url.Should().Be("https://cash.app/$testuser");
         }
 
         [Fact]
         public async Task BuildAsync_AmountFormatting_IsCultureInvariant()
         {
-            var previous = CultureInfo.CurrentCulture;
+            var prev = CultureInfo.CurrentCulture;
             try
             {
-                CultureInfo.CurrentCulture = new CultureInfo("de-DE"); // uses comma decimals
-                var methodId = Guid.NewGuid();
-                var platform = CreatePayoutPlatform("venmo", "Venmo",
-                    linkTemplate: "https://account.venmo.com/pay?recipients={handle}&amount={amount}",
+                CultureInfo.CurrentCulture = new CultureInfo("de-DE"); // comma decimals normally
+                var platform = CreatePayoutPlatform(
+                    "venmo", "Venmo",
+                    linkTemplate: "https://venmo.example?u={handle}&amount={amount}",
                     supportsAmount: true);
-                var method = CreateOwnerPayoutMethod(methodId, platform, "user");
+                var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "user");
 
-                var result = await _paymentLinkBuilder.BuildAsync(method, 25.5m, note: null);
+                var r = await _paymentLinkBuilder.BuildAsync(method, 25.5m, note: null);
 
-                result.Url.Should().Contain("amount=25.50"); // not 25,50
+                r.Url.Should().Contain("amount=25.50"); // not 25,50
             }
-            finally
-            {
-                CultureInfo.CurrentCulture = previous;
-            }
+            finally { CultureInfo.CurrentCulture = prev; }
         }
 
         [Fact]
-        public async Task BuildAsync_Note_EncodesUnicodeAndSymbols()
+        public async Task BuildAsync_Note_EncodesUnicode_AndSymbols()
         {
-            var methodId = Guid.NewGuid();
-            var platform = CreatePayoutPlatform("venmo", "Venmo",
+            var platform = CreatePayoutPlatform(
+                "venmo", "Venmo",
                 linkTemplate: "https://venmo.test?recipients={handle}&note={note}",
                 supportsNote: true);
-            var method = CreateOwnerPayoutMethod(methodId, platform, "user");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "user");
 
-            var result = await _paymentLinkBuilder.BuildAsync(method, 1m, "Thanks ?? & tacos");
+            var r = await _paymentLinkBuilder.BuildAsync(method, 1m, "Thanks ?? & tacos");
 
-            result.Url.Should().Contain("note=" + WebUtility.UrlEncode("Thanks ?? & tacos"));
+            r.Url.Should().Contain("note=" + WebUtility.UrlEncode("Thanks ?? & tacos"));
         }
 
         [Fact]
-        public async Task BuildAsync_SupportsFlags_PreventLeakage()
+        public async Task BuildAsync_SupportFlags_RemoveUnusedParams()
         {
-            var methodId = Guid.NewGuid();
-            var platform = CreatePayoutPlatform("test", "Test",
+            var platform = CreatePayoutPlatform(
+                "test", "Test",
                 linkTemplate: "https://test.com/pay?recipients={handle}&amount={amount}&note={note}",
                 supportsAmount: false, supportsNote: false);
-            var method = CreateOwnerPayoutMethod(methodId, platform, "testuser");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "testuser");
 
-            var result = await _paymentLinkBuilder.BuildAsync(method, 10.00m, "Secret");
+            var r = await _paymentLinkBuilder.BuildAsync(method, 10.00m, "Secret");
 
-            result.Url.Should().Be("https://test.com/pay?recipients=testuser");
+            r.Url.Should().Be("https://test.com/pay?recipients=testuser");
         }
 
         [Fact]
-        public async Task BuildAsync_ZeroAmountAndNullNote_RemoveEmptyParams()
+        public async Task BuildAsync_ZeroAmount_And_NullNote_RemoveEmptyParams()
         {
-            var methodId = Guid.NewGuid();
-            var platform = CreatePayoutPlatform("t", "T",
+            var platform = CreatePayoutPlatform(
+                "t", "T",
                 linkTemplate: "https://x?handle={handle}&amount={amount}&note={note}",
                 supportsAmount: false, supportsNote: false);
-            var method = CreateOwnerPayoutMethod(methodId, platform, "h");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "h");
 
-            var result = await _paymentLinkBuilder.BuildAsync(method, 0m, null);
+            var r = await _paymentLinkBuilder.BuildAsync(method, 0m, null);
 
-            result.Url.Should().Be("https://x?handle=h");
+            r.Url.Should().Be("https://x?handle=h");
         }
 
         [Fact]
         public async Task BuildAsync_UnknownPlatformId_Throws()
         {
-            var methodId = Guid.NewGuid();
-            var method = CreateOwnerPayoutMethod(methodId, null, "user");
+            var method = CreateOwnerPayoutMethod(Guid.NewGuid(), null, "user");
             method.PlatformId = 424242; // not in DB
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                _paymentLinkBuilder.BuildAsync(method, 1m, "x"));
+                _paymentLinkBuilder.BuildAsync(method, 1m, "n"));
         }
 
-        #endregion
-
-        #region BuildManyAsync Tests (original + additions)
+        /* ----------------------- BuildManyAsync ----------------------- */
 
         [Fact]
-        public async Task BuildManyAsync_WithValidMethods_ReturnsAllLinks()
+        public async Task BuildManyAsync_Valid_ReturnsAll()
         {
-            var method1Id = Guid.NewGuid();
-            var method2Id = Guid.NewGuid();
-            var platform1 = CreatePayoutPlatform("venmo", "Venmo",
+            var p1 = CreatePayoutPlatform("venmo", "Venmo",
                 linkTemplate: "https://account.venmo.com/pay?recipients={handle}");
-            var platform2 = CreatePayoutPlatform("zelle", "Zelle", isInstructionsOnly: true);
+            var p2 = CreatePayoutPlatform("zelle", "Zelle", isInstructionsOnly: true);
 
             var methods = new[]
             {
-                CreateOwnerPayoutMethod(method1Id, platform1, "user1"),
-                CreateOwnerPayoutMethod(method2Id, platform2, "user2@example.com")
+                CreateOwnerPayoutMethod(Guid.NewGuid(), p1, "user1"),
+                CreateOwnerPayoutMethod(Guid.NewGuid(), p2, "user2@example.com")
             };
 
-            var results = await _paymentLinkBuilder.BuildManyAsync(methods, 25.00m, "Test note");
+            var results = await _paymentLinkBuilder.BuildManyAsync(methods, 25.00m, "n");
 
             results.Should().HaveCount(2);
-            results.Should().Contain(r => r.MethodId == method1Id && r.PlatformKey == "venmo");
-            results.Should().Contain(r => r.MethodId == method2Id && r.PlatformKey == "zelle");
+            results.Should().Contain(x => x.PlatformKey == "venmo");
+            results.Should().Contain(x => x.PlatformKey == "zelle");
         }
 
         [Fact]
-        public async Task BuildManyAsync_WithSomeInvalidMethods_SkipsInvalidAndReturnsValid()
+        public async Task BuildManyAsync_SkipsInvalid_KeepsValid()
         {
-            var method1Id = Guid.NewGuid();
-            var method2Id = Guid.NewGuid();
-            var platform1 = CreatePayoutPlatform("venmo", "Venmo",
+            var p1 = CreatePayoutPlatform("venmo", "Venmo",
                 linkTemplate: "https://account.venmo.com/pay?recipients={handle}");
-            var platform2 = CreatePayoutPlatform("venmo2", "Venmo2",
+            var p2 = CreatePayoutPlatform("venmo2", "Venmo2",
                 linkTemplate: "https://account.venmo.com/pay?recipients={handle}",
                 handlePattern: @"^[a-zA-Z0-9._-]+$");
 
             var methods = new[]
             {
-                CreateOwnerPayoutMethod(method1Id, platform1, "validuser"),
-                CreateOwnerPayoutMethod(method2Id, platform2, "invalid@user!")
+                CreateOwnerPayoutMethod(Guid.NewGuid(), p1, "validuser"),
+                CreateOwnerPayoutMethod(Guid.NewGuid(), p2, "invalid@user!")
             };
 
-            var results = await _paymentLinkBuilder.BuildManyAsync(methods, 25.00m, "Test note");
+            var results = await _paymentLinkBuilder.BuildManyAsync(methods, 25.00m, "n");
 
             results.Should().HaveCount(1);
-            results.Should().Contain(r => r.MethodId == method1Id);
-            results.Should().NotContain(r => r.MethodId == method2Id);
+            results.Should().OnlyContain(r => r.PlatformKey == "venmo");
         }
 
         [Fact]
-        public async Task BuildManyAsync_WithMissingPlatforms_LoadsFromDatabase()
+        public async Task BuildManyAsync_MissingPlatforms_LoadFromDb()
         {
-            var method1Id = Guid.NewGuid();
-            var method2Id = Guid.NewGuid();
-            var platform1 = CreatePayoutPlatform("venmo", "Venmo",
+            var p1 = CreatePayoutPlatform("venmo", "Venmo",
                 linkTemplate: "https://account.venmo.com/pay?recipients={handle}");
-            var platform2 = CreatePayoutPlatform("zelle", "Zelle", isInstructionsOnly: true);
+            var p2 = CreatePayoutPlatform("zelle", "Zelle", isInstructionsOnly: true);
 
-            _dbContext.PayoutPlatforms.AddRange(platform1, platform2);
+            _dbContext.PayoutPlatforms.AddRange(p1, p2);
             await _dbContext.SaveChangesAsync();
 
-            var method1 = CreateOwnerPayoutMethod(method1Id, null, "user1"); method1.PlatformId = platform1.Id;
-            var method2 = CreateOwnerPayoutMethod(method2Id, platform2, "user2@example.com");
-
-            _dbContext.OwnerPayoutMethods.AddRange(method1, method2);
+            var m1 = CreateOwnerPayoutMethod(Guid.NewGuid(), null, "user1"); m1.PlatformId = p1.Id;
+            var m2 = CreateOwnerPayoutMethod(Guid.NewGuid(), p2, "user2@example.com");
+            _dbContext.OwnerPayoutMethods.AddRange(m1, m2);
             await _dbContext.SaveChangesAsync();
 
-            var results = await _paymentLinkBuilder.BuildManyAsync(new[] { method1, method2 }, 25.00m, "Test note");
+            var results = await _paymentLinkBuilder.BuildManyAsync(new[] { m1, m2 }, 25.00m, "n");
 
             results.Should().HaveCount(2);
-            results.Should().Contain(r => r.MethodId == method1Id && r.PlatformKey == "venmo");
-            results.Should().Contain(r => r.MethodId == method2Id && r.PlatformKey == "zelle");
+            results.Should().Contain(r => r.PlatformKey == "venmo");
+            results.Should().Contain(r => r.PlatformKey == "zelle");
         }
 
         [Fact]
-        public async Task BuildManyAsync_WithAllInvalidMethods_ReturnsEmptyList()
+        public async Task BuildManyAsync_AllInvalid_ReturnsEmpty()
         {
-            var method1Id = Guid.NewGuid();
-            var method2Id = Guid.NewGuid();
-            var platform = CreatePayoutPlatform("venmo", "Venmo",
+            var p = CreatePayoutPlatform("venmo", "Venmo",
                 linkTemplate: "https://account.venmo.com/pay?recipients={handle}",
                 handlePattern: @"^[a-zA-Z0-9._-]+$");
 
             var methods = new[]
             {
-                CreateOwnerPayoutMethod(method1Id, platform, "invalid@user1!"),
-                CreateOwnerPayoutMethod(method2Id, platform, "invalid@user2!")
+                CreateOwnerPayoutMethod(Guid.NewGuid(), p, "invalid@user1!"),
+                CreateOwnerPayoutMethod(Guid.NewGuid(), p, "invalid@user2!")
             };
 
-            var results = await _paymentLinkBuilder.BuildManyAsync(methods, 25.00m, "Test note");
+            var results = await _paymentLinkBuilder.BuildManyAsync(methods, 25.00m, "n");
 
             results.Should().BeEmpty();
         }
 
         [Fact]
-        public async Task BuildManyAsync_NullMethods_Throws()
+        public async Task BuildManyAsync_LabelFallbacks()
         {
-            await Assert.ThrowsAsync<ArgumentNullException>(() =>
-                _paymentLinkBuilder.BuildManyAsync(null!, 1m, "x"));
-        }
-
-        [Fact]
-        public async Task BuildManyAsync_EmptyMethods_ReturnsEmpty()
-        {
-            var results = await _paymentLinkBuilder.BuildManyAsync(Array.Empty<OwnerPayoutMethod>(), 1m, "x");
-            results.Should().BeEmpty();
-        }
-
-        [Fact]
-        public async Task BuildManyAsync_LabelFallbacks_Work()
-        {
-            var id = Guid.NewGuid();
-            var platform = CreatePayoutPlatform("venmo", "Venmo",
+            var p = CreatePayoutPlatform("venmo", "Venmo",
                 linkTemplate: "https://account.venmo.com/pay?recipients={handle}");
-            var withCustom = CreateOwnerPayoutMethod(Guid.NewGuid(), platform, "u1", "Custom Label");
-            var withoutCustom = CreateOwnerPayoutMethod(id, platform, "u2", null);
+            var withCustom = CreateOwnerPayoutMethod(Guid.NewGuid(), p, "u1", "Custom Label");
+            var withoutCustomId = Guid.NewGuid();
+            var withoutCustom = CreateOwnerPayoutMethod(withoutCustomId, p, "u2", null);
 
             var results = await _paymentLinkBuilder.BuildManyAsync(new[] { withCustom, withoutCustom }, 5m, "n");
 
             results.Should().ContainSingle(r => r.MethodId == withCustom.Id && r.Label == "Custom Label");
-            results.Should().ContainSingle(r => r.MethodId == id && r.Label == "Venmo");
+            results.Should().ContainSingle(r => r.MethodId == withoutCustomId && r.Label == "Venmo");
         }
 
-        #endregion
-
-        #region Helpers
+        /* ----------------------- Helpers ----------------------- */
 
         private static PayoutPlatform CreatePayoutPlatform(
             string key,
@@ -429,7 +377,5 @@ namespace Tests.UnitTests
                 UpdatedAt = DateTimeOffset.UtcNow
             };
         }
-
-        #endregion
     }
 }

@@ -1,12 +1,9 @@
-// Api/Controllers/ReceiptsController.cs
 using Api.Abstractions.Transport;
 using Api.Dtos.Receipts.Requests;
 using Api.Dtos.Receipts.Responses;
 using Api.Dtos.Receipts.Responses.Items;
-using Api.Models;
 using Api.Services.Receipts.Abstractions;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace Api.Controllers;
 
