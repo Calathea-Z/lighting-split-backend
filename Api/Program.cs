@@ -2,6 +2,7 @@ using Api.Common.Interfaces;
 using Api.Common.Services;
 using Api.Data;
 using Api.Infrastructure.Interfaces;
+using Api.Infrastructure.Middleware;
 using Api.Infrastructure.Queues;
 using Api.Infrastructure.Storage;
 using Api.Options;
@@ -67,8 +68,7 @@ builder.Services.AddCors(opt =>
         .WithOrigins(origins)
         .AllowAnyHeader()
         .AllowAnyMethod()
-        // Enable if you later use cookies on the client (Axios withCredentials: true):
-        // .AllowCredentials()
+        .AllowCredentials() // Required for __Host-aok cookie
         );
 });
 
@@ -112,6 +112,14 @@ builder.Services.Configure<FormOptions>(o =>
     o.MultipartBodyLengthLimit = 20_000_000; // 20 MB
 });
 
+/*HSTS Configuration ---------- */
+builder.Services.AddHsts(opts =>
+{
+    opts.Preload = true;
+    opts.IncludeSubDomains = true;
+    opts.MaxAge = TimeSpan.FromDays(365);
+});
+
 /* ---------- Kestrel request limits (optional) ---------- */
 builder.WebHost.ConfigureKestrel(o =>
 {
@@ -129,17 +137,25 @@ if (env.IsDevelopment())
 else
 {
     app.UseExceptionHandler();
+
+    // Phase 3: HSTS - force HTTPS for 1 year (including subdomains)
     app.UseHsts();
 }
 
-// Only use HTTPS redirection in production
+// Security headers (production only)
+app.UseSecurityHeaders();
+
+// HTTPS redirection (production only, dev uses HTTP via Next.js proxy)
 if (!env.IsDevelopment())
 {
     app.UseHttpsRedirection();
 }
 
-/* CORS before controllers */
+/* CORS before authentication - credentials enabled */
 app.UseCors(CorsPolicy);
+
+/* AOK ownership middleware - auto-provisions anonymous owners */
+app.UseAokMiddleware();
 
 app.MapControllers();
 

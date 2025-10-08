@@ -175,10 +175,15 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             // Timestamps
             e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
             e.Property(x => x.LastSeenAt).HasDefaultValueSql("now()");
+            e.Property(x => x.IssuedAt).HasDefaultValueSql("now()");
+            e.Property(x => x.LastSeenIp).HasMaxLength(45); // IPv6 max length
+            e.Property(x => x.LastSeenUserAgent).HasMaxLength(512);
+            e.Property(x => x.TokenVersion).HasDefaultValue((byte)1);
 
             // Helpful indexes
             e.HasIndex(x => x.LastSeenAt);
             e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => x.IssuedAt);
 
             // Keep a non-unique index for general lookup
             e.HasIndex(x => x.KeyHash).HasDatabaseName("ix_owners_keyhash");
