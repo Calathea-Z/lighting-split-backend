@@ -24,4 +24,19 @@ public sealed class ShareController(ISplitShareReader shareSplitReader) : Contro
             return NotFound();
         }
     }
+
+    // GET /api/s/{code} - Alternative route for frontend proxy
+    [HttpGet("api/s/{code}")]
+    public async Task<ActionResult<ShareSplitResponseDto>> GetApi(string code)
+    {
+        try
+        {
+            var dto = await shareSplitReader.GetByCodeAsync(code);
+            return Ok(dto);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
 }

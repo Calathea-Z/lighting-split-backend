@@ -28,6 +28,30 @@ public sealed class SplitsController : ControllerBase
         _splitPaymentService = splitPaymentService;
     }
 
+    // GET /api/splits
+    [HttpGet]
+    public async Task<ActionResult<ListSplitResponseDto>> List()
+    {
+        var owner = HttpContext.GetOwner();
+
+        var splits = await _db.SplitSessions
+            .Where(s => s.OwnerId == owner.Id)
+            .OrderByDescending(s => s.UpdatedAt)
+            .Select(s => new ListSplitResponseDto
+            {
+                Id = s.Id,
+                Name = s.Name,
+                ReceiptId = s.ReceiptId,
+                IsFinalized = s.IsFinalized,
+                HasShareCode = !string.IsNullOrEmpty(s.ShareCode),
+                CreatedAt = s.CreatedAt,
+                UpdatedAt = s.UpdatedAt
+            })
+            .ToListAsync();
+
+        return Ok(splits);
+    }
+
     // GET /api/splits/{id}/preview
     [HttpGet("{id:guid}/preview")]
     public async Task<ActionResult<SplitPreviewDto>> Preview([FromRoute] Guid id)
@@ -63,7 +87,7 @@ public sealed class SplitsController : ControllerBase
         _db.Add(s);
         await _db.SaveChangesAsync();
         return Ok(new CreateSplitResponseDto(s.Id));
-    }       
+    }
 
     // POST /api/splits/{id}/participants
     [HttpPost("{id:guid}/participants")]
@@ -190,6 +214,12 @@ public sealed class SplitsController : ControllerBase
 
         var s = await _db.SplitSessions.FirstOrDefaultAsync(x => x.Id == id && x.OwnerId == owner.Id);
         if (s is null) return NotFound();
+
+        // Ensure split is finalized before allowing share code rotation
+        if (!s.IsFinalized)
+        {
+            return BadRequest("Split must be finalized before generating share code.");
+        }
 
         s.ShareCode = await codes.GenerateUniqueAsync();
         s.UpdatedAt = DateTimeOffset.UtcNow;
