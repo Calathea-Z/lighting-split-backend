@@ -5,11 +5,13 @@ using Api.Dtos.Splits.Responses;
 using Api.Infrastructure.Middleware;
 using Api.Models.Events;
 using Api.Models.Splits;
+using Api.Options;
 using Api.Services.Events.Abstractions;
 using Api.Services.Payments;
 using Api.Services.Payments.Abstractions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Api.Controllers;
 
@@ -45,6 +47,30 @@ public sealed class SplitsController : ControllerBase
 
         var splits = await _db.SplitSessions
             .Where(s => s.OwnerId == owner.Id)
+            .OrderByDescending(s => s.UpdatedAt)
+            .Select(s => new ListSplitResponseDto
+            {
+                Id = s.Id,
+                Name = s.Name ?? string.Empty,
+                ReceiptId = s.ReceiptId,
+                IsFinalized = s.IsFinalized,
+                HasShareCode = !string.IsNullOrEmpty(s.ShareCode),
+                CreatedAt = s.CreatedAt,
+                UpdatedAt = s.UpdatedAt
+            })
+            .ToListAsync();
+
+        return Ok(splits);
+    }
+
+    // GET /api/splits/by-receipt/{receiptId}
+    [HttpGet("by-receipt/{receiptId:guid}")]
+    public async Task<ActionResult<ListSplitResponseDto>> GetByReceipt([FromRoute] Guid receiptId)
+    {
+        var owner = HttpContext.GetOwner();
+
+        var splits = await _db.SplitSessions
+            .Where(s => s.OwnerId == owner.Id && s.ReceiptId == receiptId)
             .OrderByDescending(s => s.UpdatedAt)
             .Select(s => new ListSplitResponseDto
             {
@@ -206,18 +232,18 @@ public sealed class SplitsController : ControllerBase
 
     // POST /api/splits/{id}/finalize
     [HttpPost("{id:guid}/finalize")]
-    public async Task<ActionResult<FinalizeSplitResponse>> Finalize([FromRoute] Guid id)
+    public async Task<ActionResult<FinalizeSplitResponse>> Finalize([FromRoute] Guid id, [FromServices] IOptions<FrontendOptions> frontendOptions)
     {
         var owner = HttpContext.GetOwner();
 
-        var baseUrl = $"{Request.Scheme}://{Request.Host}";
-        var dto = await _splitterFinalizerService.FinalizeAsync(id, owner.Id, baseUrl);
+        var frontendUrl = frontendOptions.Value.BaseUrl;
+        var dto = await _splitterFinalizerService.FinalizeAsync(id, owner.Id, frontendUrl);
         return Ok(dto);
     }
 
     // POST /api/splits/{id}/share/rotate
     [HttpPost("{id:guid}/share/rotate")]
-    public async Task<ActionResult<object>> RotateShare([FromRoute] Guid id, [FromServices] IShareCodeService codes)
+    public async Task<ActionResult<object>> RotateShare([FromRoute] Guid id, [FromServices] IShareCodeService codes, [FromServices] IOptions<FrontendOptions> frontendOptions)
     {
         var owner = HttpContext.GetOwner();
 
@@ -234,8 +260,8 @@ public sealed class SplitsController : ControllerBase
         s.UpdatedAt = DateTimeOffset.UtcNow;
         await _db.SaveChangesAsync();
 
-        var baseUrl = $"{Request.Scheme}://{Request.Host}";
-        return Ok(new { shareCode = s.ShareCode, shareUrl = $"{baseUrl}/s/{s.ShareCode}" });
+        var frontendUrl = frontendOptions.Value.BaseUrl;
+        return Ok(new { shareCode = s.ShareCode, shareUrl = $"{frontendUrl}/s/{s.ShareCode}" });
     }
 
     // POST /api/splits/{id}/share/revoke

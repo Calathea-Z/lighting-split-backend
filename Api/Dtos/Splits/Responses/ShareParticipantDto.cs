@@ -12,6 +12,7 @@ namespace Api.Dtos.Splits.Responses
         PaymentStatus PaymentStatus,
         DateTimeOffset? PaymentUpdatedAt,
         string? PaymentSource,
-        string? PaymentNote
+        string? PaymentNote,
+        string? ParticipantToken // Token for self-reporting payment
     );
 }

@@ -52,12 +52,23 @@ builder.Services
     }, "AokSecurity: PepperBase64 must be Base64 and at least 32 bytes (256-bit).")
     .ValidateOnStart();
 
+// Frontend configuration
+builder.Services
+    .AddOptions<FrontendOptions>()
+    .Bind(cfg.GetSection("Frontend"))
+    .ValidateOnStart();
+
 /* ---------- EF Core: PostgreSQL ---------- */
 builder.Services.AddDbContext<LightningDbContext>(opts =>
     opts.UseNpgsql(cfg.GetConnectionString("Default")));
 
 /* ---------- MVC ---------- */
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        // Serialize enums as strings instead of numbers
+        options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+    });
 builder.Services.AddProblemDetails();
 
 /* ---------- Data Protection ---------- */

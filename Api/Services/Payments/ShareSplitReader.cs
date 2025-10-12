@@ -14,11 +14,13 @@ public sealed class SplitShareReader : ISplitShareReader
 {
     private readonly LightningDbContext _db;
     private readonly IPaymentLinkBuilder _links;
+    private readonly IParticipantTokenService _tokenService;
 
-    public SplitShareReader(LightningDbContext db, IPaymentLinkBuilder links)
+    public SplitShareReader(LightningDbContext db, IPaymentLinkBuilder links, IParticipantTokenService tokenService)
     {
         _db = db;
         _links = links;
+        _tokenService = tokenService;
     }
 
     public async Task<ShareSplitResponseDto> GetByCodeAsync(string code)
@@ -49,6 +51,10 @@ public sealed class SplitShareReader : ISplitShareReader
         {
             var links = await _links.BuildManyAsync(ownerMethods, p.Total, $"Lightning Split {split.Id.ToString()[..8]}");
             var isPaid = p.PaymentStatus == PaymentStatus.Paid;
+            
+            // Generate participant token for self-reporting payment
+            var participantToken = _tokenService.GenerateToken(split.Id, p.ParticipantId);
+            
             people.Add(new ShareParticipantDto(
                 p.ParticipantId,
                 p.DisplayName,
@@ -58,7 +64,8 @@ public sealed class SplitShareReader : ISplitShareReader
                 p.PaymentStatus,
                 p.PaymentUpdatedAt,
                 p.PaymentSource,
-                p.PaymentNote));
+                p.PaymentNote,
+                participantToken));
         }
 
         return new ShareSplitResponseDto(split.Id, code, people);
