@@ -1,4 +1,5 @@
 ﻿using Api.Contracts.Payment;
+using Api.Models.Splits;
 
 namespace Api.Dtos.Splits.Responses
 {
@@ -7,6 +8,10 @@ namespace Api.Dtos.Splits.Responses
         string DisplayName,
         decimal Total,
         IReadOnlyList<PaymentLink> PaymentLinks,
-        bool IsPaid
+        bool IsPaid,
+        PaymentStatus PaymentStatus,
+        DateTimeOffset? PaymentUpdatedAt,
+        string? PaymentSource,
+        string? PaymentNote
     );
 }

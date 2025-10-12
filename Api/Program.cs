@@ -7,6 +7,8 @@ using Api.Infrastructure.Queues;
 using Api.Infrastructure.Storage;
 using Api.Options;
 using Api.Options.Validators;
+using Api.Services.Events;
+using Api.Services.Events.Abstractions;
 using Api.Services.Payments;
 using Api.Services.Payments.Abstractions;
 using Api.Services.Receipts;
@@ -58,6 +60,9 @@ builder.Services.AddDbContext<LightningDbContext>(opts =>
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
 
+/* ---------- Data Protection ---------- */
+builder.Services.AddDataProtection();
+
 /* ---------- CORS ---------- */
 const string CorsPolicy = "UiDev";
 builder.Services.AddCors(opt =>
@@ -104,6 +109,8 @@ builder.Services.AddScoped<ISplitFinalizerService, SplitFinalizerService>();
 builder.Services.AddScoped<ISplitShareReader, SplitShareReader>();
 builder.Services.AddScoped<ISplitPaymentService, SplitPaymentService>();
 builder.Services.AddScoped<IShareCodeService, ShareCodeService>();
+builder.Services.AddScoped<IParticipantTokenService, ParticipantTokenService>();
+builder.Services.AddSingleton<IEventStreamService, EventStreamService>();
 
 /* ---------- Multipart/form-data limits (global) ---------- */
 builder.Services.Configure<FormOptions>(o =>

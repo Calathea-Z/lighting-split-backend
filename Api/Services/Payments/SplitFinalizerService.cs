@@ -51,10 +51,31 @@ public sealed class SplitFinalizerService : ISplitFinalizerService
                 DiscountAlloc = p.DiscountAlloc,
                 TaxAlloc = p.TaxAlloc,
                 TipAlloc = p.TipAlloc,
-                Total = p.Total
+                Total = p.Total,
+                // Initialize payment status as Unpaid
+                PaymentStatus = PaymentStatus.Unpaid,
+                PaymentUpdatedAt = DateTimeOffset.UtcNow
             })]
         };
         _db.SplitResults.Add(snapshot);
+
+        // Create initial payment status events for audit trail
+        var correlationId = Guid.NewGuid().ToString();
+        var initialEvents = snapshot.Participants.Select(p => new PaymentStatusEvent
+        {
+            Id = Guid.NewGuid(),
+            SplitResultId = snapshot.Id,
+            SplitParticipantResultId = p.Id,
+            OldStatus = PaymentStatus.Unpaid, // No previous status
+            NewStatus = PaymentStatus.Unpaid,
+            Source = "system",
+            ActorId = null, // System initialization
+            Timestamp = DateTimeOffset.UtcNow,
+            CorrelationId = correlationId,
+            Notes = "Split finalized - payment status initialized"
+        }).ToList();
+
+        _db.PaymentStatusEvents.AddRange(initialEvents);
 
         // Share code + flags
         split.ShareCode ??= await GenerateUniqueCodeAsync();
@@ -86,7 +107,15 @@ public sealed class SplitFinalizerService : ISplitFinalizerService
         foreach (var p in result.Participants.OrderBy(x => x.DisplayName))
         {
             var links = await _links.BuildManyAsync(ownerMethods, p.Total, $"Lightning Split {split.Id.ToString()[..8]}");
-            participants.Add(new FinalizeParticipantDto(p.ParticipantId, p.DisplayName, p.Total, links));
+            participants.Add(new FinalizeParticipantDto(
+                p.ParticipantId,
+                p.DisplayName,
+                p.Total,
+                links,
+                p.PaymentStatus,
+                p.PaymentUpdatedAt,
+                p.PaymentSource,
+                p.PaymentNote));
         }
 
         return new FinalizeSplitResponse(

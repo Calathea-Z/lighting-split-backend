@@ -3,7 +3,9 @@ using Api.Dtos.Splits.Common;
 using Api.Dtos.Splits.Requests;
 using Api.Dtos.Splits.Responses;
 using Api.Infrastructure.Middleware;
+using Api.Models.Events;
 using Api.Models.Splits;
+using Api.Services.Events.Abstractions;
 using Api.Services.Payments;
 using Api.Services.Payments.Abstractions;
 using Microsoft.AspNetCore.Mvc;
@@ -19,13 +21,20 @@ public sealed class SplitsController : ControllerBase
     private readonly ISplitCalculator _calc;
     private readonly ISplitFinalizerService _splitterFinalizerService;
     private readonly ISplitPaymentService _splitPaymentService;
+    private readonly IEventStreamService _eventStream;
 
-    public SplitsController(LightningDbContext db, ISplitCalculator calc, ISplitFinalizerService splitterFinalizerService, ISplitPaymentService splitPaymentService)
+    public SplitsController(
+        LightningDbContext db,
+        ISplitCalculator calc,
+        ISplitFinalizerService splitterFinalizerService,
+        ISplitPaymentService splitPaymentService,
+        IEventStreamService eventStream)
     {
         _db = db;
         _calc = calc;
         _splitterFinalizerService = splitterFinalizerService;
         _splitPaymentService = splitPaymentService;
+        _eventStream = eventStream;
     }
 
     // GET /api/splits
@@ -40,7 +49,7 @@ public sealed class SplitsController : ControllerBase
             .Select(s => new ListSplitResponseDto
             {
                 Id = s.Id,
-                Name = s.Name,
+                Name = s.Name ?? string.Empty,
                 ReceiptId = s.ReceiptId,
                 IsFinalized = s.IsFinalized,
                 HasShareCode = !string.IsNullOrEmpty(s.ShareCode),
@@ -262,5 +271,288 @@ public sealed class SplitsController : ControllerBase
         {
             return NotFound();
         }
+    }
+
+    // PATCH /api/splits/{id}/participants/{participantId}/payment-status
+    [HttpPatch("{id:guid}/participants/{participantId:guid}/payment-status")]
+    public async Task<IActionResult> UpdatePaymentStatus(
+        [FromRoute] Guid id,
+        [FromRoute] Guid participantId,
+        [FromBody] UpdatePaymentStatusDto dto)
+    {
+        var owner = HttpContext.GetOwner();
+
+        // Verify split ownership
+        var split = await _db.SplitSessions
+            .FirstOrDefaultAsync(s => s.Id == id && s.OwnerId == owner.Id);
+        if (split is null) return NotFound("Split not found");
+
+        // Get the latest split result
+        var result = await _db.SplitResults
+            .Include(r => r.Participants)
+            .Where(r => r.SplitSessionId == id)
+            .OrderByDescending(r => r.CreatedAt)
+            .FirstOrDefaultAsync();
+        if (result is null) return NotFound("Split not finalized");
+
+        // Find the participant result
+        var participantResult = result.Participants
+            .FirstOrDefault(p => p.ParticipantId == participantId);
+        if (participantResult is null) return NotFound("Participant not found");
+
+        // Store old status for audit
+        var oldStatus = participantResult.PaymentStatus;
+
+        // Update payment status
+        participantResult.PaymentStatus = dto.Status;
+        participantResult.PaymentUpdatedAt = DateTimeOffset.UtcNow;
+        participantResult.PaymentSource = dto.Source;
+        participantResult.PaymentNote = dto.Note;
+
+        // Create audit event
+        var auditEvent = new PaymentStatusEvent
+        {
+            Id = Guid.NewGuid(),
+            SplitResultId = result.Id,
+            SplitParticipantResultId = participantResult.Id,
+            OldStatus = oldStatus,
+            NewStatus = dto.Status,
+            Source = dto.Source ?? "manual",
+            ActorId = owner.Id,
+            Timestamp = DateTimeOffset.UtcNow,
+            CorrelationId = dto.CorrelationId,
+            Notes = dto.Note
+        };
+
+        _db.PaymentStatusEvents.Add(auditEvent);
+        await _db.SaveChangesAsync();
+
+        // Emit real-time event
+        var statusEvent = new PaymentStatusChangedEvent
+        {
+            SplitResultId = result.Id,
+            ParticipantResultId = participantResult.Id,
+            Status = dto.Status.ToString(),
+            Source = dto.Source ?? "manual",
+            Timestamp = DateTimeOffset.UtcNow,
+            ParticipantName = participantResult.DisplayName,
+            Amount = participantResult.Total
+        };
+        await _eventStream.EmitPaymentStatusChangedAsync(statusEvent);
+
+        return NoContent();
+    }
+
+    // POST /api/splits/{id}/participants/{participantId}/self-report
+    [HttpPost("{id:guid}/participants/{participantId:guid}/self-report")]
+    public async Task<IActionResult> SelfReportPayment(
+        [FromRoute] Guid id,
+        [FromRoute] Guid participantId,
+        [FromBody] SelfReportPaymentDto dto,
+        [FromServices] IParticipantTokenService tokenService)
+    {
+        // Validate token
+        var tokenData = tokenService.ValidateToken(dto.Token);
+        if (tokenData == null || tokenData.Value.splitId != id || tokenData.Value.participantId != participantId)
+        {
+            return BadRequest("Invalid or expired token");
+        }
+
+        // Get the latest split result
+        var result = await _db.SplitResults
+            .Include(r => r.Participants)
+            .Where(r => r.SplitSessionId == id)
+            .OrderByDescending(r => r.CreatedAt)
+            .FirstOrDefaultAsync();
+        if (result is null) return NotFound("Split not finalized");
+
+        // Find the participant result
+        var participantResult = result.Participants
+            .FirstOrDefault(p => p.ParticipantId == participantId);
+        if (participantResult is null) return NotFound("Participant not found");
+
+        // Store old status for audit
+        var oldStatus = participantResult.PaymentStatus;
+
+        // Update payment status to SelfReported
+        participantResult.PaymentStatus = PaymentStatus.SelfReported;
+        participantResult.PaymentUpdatedAt = DateTimeOffset.UtcNow;
+        participantResult.PaymentSource = "self-reported";
+        participantResult.PaymentNote = dto.Note;
+
+        // Create audit event
+        var auditEvent = new PaymentStatusEvent
+        {
+            Id = Guid.NewGuid(),
+            SplitResultId = result.Id,
+            SplitParticipantResultId = participantResult.Id,
+            OldStatus = oldStatus,
+            NewStatus = PaymentStatus.SelfReported,
+            Source = "self-reported",
+            ActorId = null, // No authenticated user
+            Timestamp = DateTimeOffset.UtcNow,
+            CorrelationId = Guid.NewGuid().ToString(),
+            Notes = dto.Note
+        };
+
+        _db.PaymentStatusEvents.Add(auditEvent);
+        await _db.SaveChangesAsync();
+
+        // Emit real-time event
+        var statusEvent = new PaymentStatusChangedEvent
+        {
+            SplitResultId = result.Id,
+            ParticipantResultId = participantResult.Id,
+            Status = PaymentStatus.SelfReported.ToString(),
+            Source = "self-reported",
+            Timestamp = DateTimeOffset.UtcNow,
+            ParticipantName = participantResult.DisplayName,
+            Amount = participantResult.Total
+        };
+        await _eventStream.EmitPaymentStatusChangedAsync(statusEvent);
+
+        return NoContent();
+    }
+
+    // POST /api/splits/{id}/participants/{participantId}/verify
+    [HttpPost("{id:guid}/participants/{participantId:guid}/verify")]
+    public async Task<IActionResult> VerifyPayment(
+        [FromRoute] Guid id,
+        [FromRoute] Guid participantId,
+        [FromBody] VerifyPaymentDto dto)
+    {
+        var owner = HttpContext.GetOwner();
+
+        // Verify split ownership
+        var split = await _db.SplitSessions
+            .FirstOrDefaultAsync(s => s.Id == id && s.OwnerId == owner.Id);
+        if (split is null) return NotFound("Split not found");
+
+        // Get the latest split result
+        var result = await _db.SplitResults
+            .Include(r => r.Participants)
+            .Where(r => r.SplitSessionId == id)
+            .OrderByDescending(r => r.CreatedAt)
+            .FirstOrDefaultAsync();
+        if (result is null) return NotFound("Split not finalized");
+
+        // Find the participant result
+        var participantResult = result.Participants
+            .FirstOrDefault(p => p.ParticipantId == participantId);
+        if (participantResult is null) return NotFound("Participant not found");
+
+        // Store old status for audit
+        var oldStatus = participantResult.PaymentStatus;
+
+        // Update payment status to Verified
+        participantResult.PaymentStatus = PaymentStatus.Verified;
+        participantResult.PaymentUpdatedAt = DateTimeOffset.UtcNow;
+        participantResult.PaymentSource = "owner-verified";
+        participantResult.PaymentNote = dto.Note;
+        participantResult.VerifiedByUserId = owner.Id;
+
+        // Create audit event
+        var auditEvent = new PaymentStatusEvent
+        {
+            Id = Guid.NewGuid(),
+            SplitResultId = result.Id,
+            SplitParticipantResultId = participantResult.Id,
+            OldStatus = oldStatus,
+            NewStatus = PaymentStatus.Verified,
+            Source = "owner-verified",
+            ActorId = owner.Id,
+            Timestamp = DateTimeOffset.UtcNow,
+            CorrelationId = Guid.NewGuid().ToString(),
+            Notes = dto.Note
+        };
+
+        _db.PaymentStatusEvents.Add(auditEvent);
+        await _db.SaveChangesAsync();
+
+        // Emit real-time event
+        var statusEvent = new PaymentStatusChangedEvent
+        {
+            SplitResultId = result.Id,
+            ParticipantResultId = participantResult.Id,
+            Status = PaymentStatus.Verified.ToString(),
+            Source = "owner-verified",
+            Timestamp = DateTimeOffset.UtcNow,
+            ParticipantName = participantResult.DisplayName,
+            Amount = participantResult.Total
+        };
+        await _eventStream.EmitPaymentStatusChangedAsync(statusEvent);
+
+        return NoContent();
+    }
+
+    // POST /api/splits/{id}/participants/{participantId}/revert
+    [HttpPost("{id:guid}/participants/{participantId:guid}/revert")]
+    public async Task<IActionResult> RevertPayment(
+        [FromRoute] Guid id,
+        [FromRoute] Guid participantId,
+        [FromBody] RevertPaymentDto dto)
+    {
+        var owner = HttpContext.GetOwner();
+
+        // Verify split ownership
+        var split = await _db.SplitSessions
+            .FirstOrDefaultAsync(s => s.Id == id && s.OwnerId == owner.Id);
+        if (split is null) return NotFound("Split not found");
+
+        // Get the latest split result
+        var result = await _db.SplitResults
+            .Include(r => r.Participants)
+            .Where(r => r.SplitSessionId == id)
+            .OrderByDescending(r => r.CreatedAt)
+            .FirstOrDefaultAsync();
+        if (result is null) return NotFound("Split not finalized");
+
+        // Find the participant result
+        var participantResult = result.Participants
+            .FirstOrDefault(p => p.ParticipantId == participantId);
+        if (participantResult is null) return NotFound("Participant not found");
+
+        // Store old status for audit
+        var oldStatus = participantResult.PaymentStatus;
+
+        // Update payment status back to Unpaid
+        participantResult.PaymentStatus = PaymentStatus.Unpaid;
+        participantResult.PaymentUpdatedAt = DateTimeOffset.UtcNow;
+        participantResult.PaymentSource = "owner-reverted";
+        participantResult.PaymentNote = dto.Note;
+        participantResult.VerifiedByUserId = null;
+
+        // Create audit event
+        var auditEvent = new PaymentStatusEvent
+        {
+            Id = Guid.NewGuid(),
+            SplitResultId = result.Id,
+            SplitParticipantResultId = participantResult.Id,
+            OldStatus = oldStatus,
+            NewStatus = PaymentStatus.Unpaid,
+            Source = "owner-reverted",
+            ActorId = owner.Id,
+            Timestamp = DateTimeOffset.UtcNow,
+            CorrelationId = Guid.NewGuid().ToString(),
+            Notes = dto.Note
+        };
+
+        _db.PaymentStatusEvents.Add(auditEvent);
+        await _db.SaveChangesAsync();
+
+        // Emit real-time event
+        var statusEvent = new PaymentStatusChangedEvent
+        {
+            SplitResultId = result.Id,
+            ParticipantResultId = participantResult.Id,
+            Status = PaymentStatus.Unpaid.ToString(),
+            Source = "owner-reverted",
+            Timestamp = DateTimeOffset.UtcNow,
+            ParticipantName = participantResult.DisplayName,
+            Amount = participantResult.Total
+        };
+        await _eventStream.EmitPaymentStatusChangedAsync(statusEvent);
+
+        return NoContent();
     }
 }

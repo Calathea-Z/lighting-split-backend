@@ -77,6 +77,10 @@ namespace Api.Migrations
 
                     b.HasIndex("LastSeenAt");
 
+                    b.HasIndex("LastSeenIp", "LastSeenUserAgent")
+                        .IsUnique()
+                        .HasFilter("\"RevokedAt\" IS NULL");
+
                     b.ToTable("Owners");
                 });
 
@@ -506,6 +510,62 @@ namespace Api.Migrations
                     b.ToTable("ItemClaims");
                 });
 
+            modelBuilder.Entity("Api.Models.Splits.PaymentStatusEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ActorId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CorrelationId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("NewStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("OldStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("SplitParticipantResultId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("SplitResultId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("Timestamp")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamptz")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActorId");
+
+                    b.HasIndex("CorrelationId");
+
+                    b.HasIndex("SplitParticipantResultId", "Timestamp");
+
+                    b.HasIndex("SplitResultId", "Timestamp");
+
+                    b.ToTable("PaymentStatusEvents");
+                });
+
             modelBuilder.Entity("Api.Models.Splits.SplitParticipant", b =>
                 {
                     b.Property<Guid>("Id")
@@ -552,6 +612,22 @@ namespace Api.Migrations
                     b.Property<Guid>("ParticipantId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("PaymentNote")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("PaymentSource")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("PaymentStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset?>("PaymentUpdatedAt")
+                        .HasColumnType("timestamptz");
+
                     b.Property<Guid>("SplitResultId")
                         .HasColumnType("uuid");
 
@@ -567,9 +643,14 @@ namespace Api.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
+                    b.Property<Guid?>("VerifiedByUserId")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
 
-                    b.HasIndex("SplitResultId");
+                    b.HasIndex("PaymentUpdatedAt");
+
+                    b.HasIndex("SplitResultId", "PaymentStatus");
 
                     b.ToTable("SplitParticipantResults");
                 });
@@ -733,6 +814,25 @@ namespace Api.Migrations
                     b.Navigation("Split");
                 });
 
+            modelBuilder.Entity("Api.Models.Splits.PaymentStatusEvent", b =>
+                {
+                    b.HasOne("Api.Models.Splits.SplitParticipantResult", "SplitParticipantResult")
+                        .WithMany()
+                        .HasForeignKey("SplitParticipantResultId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Api.Models.Splits.SplitResult", "SplitResult")
+                        .WithMany("PaymentStatusEvents")
+                        .HasForeignKey("SplitResultId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("SplitParticipantResult");
+
+                    b.Navigation("SplitResult");
+                });
+
             modelBuilder.Entity("Api.Models.Splits.SplitParticipant", b =>
                 {
                     b.HasOne("Api.Models.Splits.SplitSession", "Split")
@@ -809,6 +909,8 @@ namespace Api.Migrations
             modelBuilder.Entity("Api.Models.Splits.SplitResult", b =>
                 {
                     b.Navigation("Participants");
+
+                    b.Navigation("PaymentStatusEvents");
                 });
 
             modelBuilder.Entity("Api.Models.Splits.SplitSession", b =>

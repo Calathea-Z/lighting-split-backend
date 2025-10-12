@@ -1,4 +1,5 @@
 ﻿using Api.Contracts.Payment;
+using Api.Models.Splits;
 
 namespace Api.Dtos.Splits.Responses
 {
@@ -6,5 +7,9 @@ namespace Api.Dtos.Splits.Responses
         Guid ParticipantId,
         string DisplayName,
         decimal Total,
-        IReadOnlyList<PaymentLink> PaymentLinks);
+        IReadOnlyList<PaymentLink> PaymentLinks,
+        PaymentStatus PaymentStatus,
+        DateTimeOffset? PaymentUpdatedAt,
+        string? PaymentSource,
+        string? PaymentNote);
 }

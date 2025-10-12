@@ -21,6 +21,7 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
     public DbSet<SplitResult> SplitResults => Set<SplitResult>();
     public DbSet<SplitParticipantResult> SplitParticipantResults => Set<SplitParticipantResult>();
     public DbSet<SplitPayment> SplitPayments => Set<SplitPayment>();
+    public DbSet<PaymentStatusEvent> PaymentStatusEvents => Set<PaymentStatusEvent>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -397,6 +398,19 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             e.Property(x => x.TaxAlloc).HasPrecision(18, 2);
             e.Property(x => x.TipAlloc).HasPrecision(18, 2);
             e.Property(x => x.Total).HasPrecision(18, 2);
+
+            // Payment tracking fields
+            e.Property(x => x.PaymentStatus)
+             .HasConversion<string>()
+             .HasMaxLength(32)
+             .IsRequired();
+            e.Property(x => x.PaymentUpdatedAt).HasColumnType("timestamptz");
+            e.Property(x => x.PaymentSource).HasMaxLength(64);
+            e.Property(x => x.PaymentNote).HasMaxLength(500);
+
+            // Indexes for payment queries
+            e.HasIndex(x => new { x.SplitResultId, x.PaymentStatus });
+            e.HasIndex(x => x.PaymentUpdatedAt);
         });
 
         // =========================
@@ -426,6 +440,63 @@ public class LightningDbContext(DbContextOptions<LightningDbContext> options) : 
             // nice-to-have defaults (Postgres)
             e.Property(x => x.CreatedAt).HasDefaultValueSql("now() at time zone 'utc'");
             e.Property(x => x.UpdatedAt).HasDefaultValueSql("now() at time zone 'utc'");
+        });
+
+        // =========================
+        // Payment Status Event
+        // =========================
+        b.Entity<PaymentStatusEvent>(e =>
+        {
+            e.HasKey(x => x.Id);
+
+            e.HasOne(x => x.SplitResult)
+             .WithMany(r => r.PaymentStatusEvents)
+             .HasForeignKey(x => x.SplitResultId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasOne(x => x.SplitParticipantResult)
+             .WithMany()
+             .HasForeignKey(x => x.SplitParticipantResultId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            // Payment status as string enum
+            e.Property(x => x.OldStatus)
+             .HasConversion<string>()
+             .HasMaxLength(32)
+             .IsRequired();
+            e.Property(x => x.NewStatus)
+             .HasConversion<string>()
+             .HasMaxLength(32)
+             .IsRequired();
+
+            e.Property(x => x.Source).IsRequired().HasMaxLength(64);
+            e.Property(x => x.CorrelationId).HasMaxLength(128);
+            e.Property(x => x.Notes).HasMaxLength(1000);
+
+            e.Property(x => x.Timestamp)
+             .HasColumnType("timestamptz")
+             .HasDefaultValueSql("now()")
+             .IsRequired();
+
+            // Indexes for audit queries
+            e.HasIndex(x => new { x.SplitResultId, x.Timestamp });
+            e.HasIndex(x => new { x.SplitParticipantResultId, x.Timestamp });
+            e.HasIndex(x => x.CorrelationId);
+            e.HasIndex(x => x.ActorId);
+        });
+
+        // =========================
+        // Owner
+        // =========================
+        b.Entity<Owner>(e =>
+        {
+            e.HasKey(x => x.Id);
+
+            // Unique constraint to prevent duplicate owners for same session
+            // Only enforce uniqueness for active owners (RevokedAt IS NULL)
+            e.HasIndex(x => new { x.LastSeenIp, x.LastSeenUserAgent })
+             .IsUnique()
+             .HasFilter("\"RevokedAt\" IS NULL");
         });
     }
 }

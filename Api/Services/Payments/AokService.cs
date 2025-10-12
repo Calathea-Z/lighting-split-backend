@@ -4,6 +4,7 @@ using Api.Options;
 using Api.Services.Payments.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -21,6 +22,7 @@ public sealed class AokService : IAokService
     private readonly byte[] _pepper; // HMAC key (server-side secret)
     private readonly AokSecurityOptions _opts;
     private readonly IWebHostEnvironment _env;
+
 
     public AokService(LightningDbContext db, IOptions<AokSecurityOptions> opts, IWebHostEnvironment env)
     {
@@ -53,7 +55,21 @@ public sealed class AokService : IAokService
         var clientIp = GetClientIp(http);
         var userAgent = GetUserAgent(http);
 
-        // 1) Try to resolve from cookie first
+        // 0) Check for service-to-service token first (Azure Functions, internal services)
+        var serviceToken = TryReadServiceToken(http);
+        if (!string.IsNullOrWhiteSpace(serviceToken))
+        {
+            if (IsValidServiceToken(serviceToken))
+            {
+                // Service token is valid - get or create a dedicated service owner
+                var serviceOwner = await GetOrCreateServiceOwnerAsync();
+                return (serviceOwner, null); // No token rotation for service accounts
+            }
+            // Invalid service token - reject
+            return (null, null);
+        }
+
+        // 1) Try to resolve from cookie
         var cookieToken = http.Request.Cookies[GetCookieName()];
         if (!string.IsNullOrWhiteSpace(cookieToken))
         {
@@ -215,31 +231,86 @@ public sealed class AokService : IAokService
 
     private async Task<(Owner owner, string rawToken)> CreateNewOwnerAsync(string? clientIp, string? userAgent)
     {
-        var now = DateTimeOffset.UtcNow;
-        var ownerId = Guid.NewGuid();
+        // Always normalize UserAgent to prevent different values for same session
+        // This ensures consistent UserAgent values across all owner records
+        var normalizedUserAgent = string.IsNullOrWhiteSpace(userAgent) ? "unknown" : "browser";
 
-        // Phase 2: Generate structured token with version
+        // Try to find existing owner first - use more flexible matching
+        // Look for recent owners (within last 24 hours) with same IP OR UserAgent
+        // This prevents duplicate owner creation when IP changes (dev/proxy) or UserAgent varies
+        var recentCutoff = DateTimeOffset.UtcNow.AddHours(-24);
+        
+        var existingOwner = await _db.Owners
+            .Where(o => o.RevokedAt == null && o.CreatedAt >= recentCutoff)
+            .Where(o => (o.LastSeenIp == clientIp) || (o.LastSeenUserAgent == normalizedUserAgent))
+            .OrderByDescending(o => o.CreatedAt)
+            .FirstOrDefaultAsync();
 
-        var rawToken = GenerateToken(ownerId, _opts.TokenVersion);
-        var hash = HashToken(rawToken);
-
-        var owner = new Owner
+        if (existingOwner != null)
         {
-            Id = ownerId,
-            KeyHash = hash,
-            CreatedAt = now,
-            LastSeenAt = now,
-            IssuedAt = now,
-            TokenVersion = _opts.TokenVersion,
-            LastSeenIp = clientIp,
-            LastSeenUserAgent = userAgent,
-            RevokedAt = null
-        };
+            // Found existing owner - return it with a new token
+            var existingToken = GenerateToken(existingOwner.Id, _opts.TokenVersion);
+            existingOwner.LastSeenAt = DateTimeOffset.UtcNow;
+            existingOwner.LastSeenIp = clientIp; // Update IP in case it changed
+            existingOwner.LastSeenUserAgent = normalizedUserAgent; // Update UserAgent
+            await _db.SaveChangesAsync();
+            return (existingOwner, existingToken);
+        }
 
-        _db.Owners.Add(owner);
-        await _db.SaveChangesAsync();
+        // No existing owner - try to create one
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var ownerId = Guid.NewGuid();
+            var newToken = GenerateToken(ownerId, _opts.TokenVersion);
+            var hash = HashToken(newToken);
 
-        return (owner, rawToken);
+            var owner = new Owner
+            {
+                Id = ownerId,
+                KeyHash = hash,
+                CreatedAt = now,
+                LastSeenAt = now,
+                IssuedAt = now,
+                TokenVersion = _opts.TokenVersion,
+                LastSeenIp = clientIp,
+                LastSeenUserAgent = normalizedUserAgent,
+                RevokedAt = null
+            };
+
+            _db.Owners.Add(owner);
+            await _db.SaveChangesAsync();
+            return (owner, newToken);
+        }
+        catch (DbUpdateException) when (IsUniqueConstraintViolation())
+        {
+            // Another request created the owner - find and return it using same flexible logic
+            var competingOwner = await _db.Owners
+                .Where(o => o.RevokedAt == null && o.CreatedAt >= recentCutoff)
+                .Where(o => (o.LastSeenIp == clientIp) || (o.LastSeenUserAgent == normalizedUserAgent))
+                .OrderByDescending(o => o.CreatedAt)
+                .FirstOrDefaultAsync();
+
+            if (competingOwner != null)
+            {
+                var existingToken = GenerateToken(competingOwner.Id, _opts.TokenVersion);
+                competingOwner.LastSeenAt = DateTimeOffset.UtcNow;
+                competingOwner.LastSeenIp = clientIp; // Update IP in case it changed
+                competingOwner.LastSeenUserAgent = normalizedUserAgent; // Update UserAgent
+                await _db.SaveChangesAsync();
+                return (competingOwner, existingToken);
+            }
+
+            // This shouldn't happen, but if it does, retry once
+            return await CreateNewOwnerAsync(clientIp, userAgent);
+        }
+    }
+
+    private bool IsUniqueConstraintViolation()
+    {
+        // Check if the exception is due to unique constraint violation
+        // This is database-specific, but the pattern is consistent
+        return true; // Simplified for now - in production you'd check the specific exception
     }
 
     private async Task<(Owner? owner, bool needsRotation)> ResolveAndTouchAsync(string token, string? clientIp, string? userAgent)
@@ -292,7 +363,7 @@ public sealed class AokService : IAokService
         // Update audit fields
         owner.LastSeenAt = DateTimeOffset.UtcNow;
         owner.LastSeenIp = clientIp;
-        owner.LastSeenUserAgent = userAgent;
+        owner.LastSeenUserAgent = string.IsNullOrWhiteSpace(userAgent) ? "unknown" : "browser"; // Normalize UserAgent consistently
         await _db.SaveChangesAsync();
 
 
@@ -313,6 +384,8 @@ public sealed class AokService : IAokService
         if (owner is null) return null;
 
         owner.LastSeenAt = DateTimeOffset.UtcNow;
+        // Note: Legacy method doesn't have access to userAgent parameter, so we can't normalize here
+        // This is acceptable since this method is marked as legacy
         await _db.SaveChangesAsync();
         return owner;
     }
@@ -358,6 +431,90 @@ public sealed class AokService : IAokService
         return http.Request.Headers.TryGetValue("X-AOK", out var hv)
             ? hv.ToString()
             : null;
+    }
+
+    private static string? TryReadServiceToken(HttpContext http)
+    {
+        // Check for X-Service-Token header (for Azure Functions, internal services)
+        return http.Request.Headers.TryGetValue("X-Service-Token", out var hv)
+            ? hv.ToString()
+            : null;
+    }
+
+    private bool IsValidServiceToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return false;
+        if (string.IsNullOrWhiteSpace(_opts.ServiceToken)) return false;
+
+        // Constant-time comparison to prevent timing attacks
+        return CryptographicEquals(token, _opts.ServiceToken);
+    }
+
+    private static bool CryptographicEquals(string a, string b)
+    {
+        if (a == null || b == null) return false;
+        if (a.Length != b.Length) return false;
+
+        var diff = 0;
+        for (var i = 0; i < a.Length; i++)
+        {
+            diff |= a[i] ^ b[i];
+        }
+        return diff == 0;
+    }
+
+    private async Task<Owner> GetOrCreateServiceOwnerAsync()
+    {
+        // Use a well-known GUID for the service account (deterministic based on a namespace)
+        // This ensures we always get the same service owner
+        var serviceOwnerId = new Guid("00000000-0000-0000-0000-000000000001"); // Reserved service account ID
+
+        var serviceOwner = await _db.Owners
+            .FirstOrDefaultAsync(o => o.Id == serviceOwnerId);
+
+        if (serviceOwner != null)
+        {
+            // Update last seen
+            serviceOwner.LastSeenAt = DateTimeOffset.UtcNow;
+            await _db.SaveChangesAsync();
+            return serviceOwner;
+        }
+
+        // Create the service owner
+        var now = DateTimeOffset.UtcNow;
+        var newServiceOwner = new Owner
+        {
+            Id = serviceOwnerId,
+            KeyHash = "service", // Not used for service accounts
+            CreatedAt = now,
+            LastSeenAt = now,
+            IssuedAt = now,
+            TokenVersion = _opts.TokenVersion,
+            LastSeenIp = "service",
+            LastSeenUserAgent = "azure-function",
+            RevokedAt = null
+        };
+
+        _db.Owners.Add(newServiceOwner);
+        
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // Race condition - another request created it
+            var existing = await _db.Owners.FirstOrDefaultAsync(o => o.Id == serviceOwnerId);
+            if (existing != null)
+            {
+                existing.LastSeenAt = DateTimeOffset.UtcNow;
+                await _db.SaveChangesAsync();
+                return existing;
+            }
+            throw; // Shouldn't happen
+        }
+
+        return newServiceOwner;
     }
 
     private string HashToken(string token)

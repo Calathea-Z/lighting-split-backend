@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Api.Data;
 using Api.Dtos.Splits.Responses;
+using Api.Models.Splits;
 using Api.Services.Payments.Abstractions;
 using Microsoft.EntityFrameworkCore;
 
@@ -43,18 +44,21 @@ public sealed class SplitShareReader : ISplitShareReader
             .ThenBy(m => m.Platform.SortOrder)
             .ToListAsync();
 
-        // Paid state per participant (owner-managed)
-        var paidMap = await _db.SplitPayments
-            .AsNoTracking()
-            .Where(x => x.SplitSessionId == split.Id)
-            .ToDictionaryAsync(x => x.ParticipantId, x => x.IsPaid);
-
         var people = new List<ShareParticipantDto>(result.Participants.Count);
         foreach (var p in result.Participants.OrderBy(x => x.DisplayName))
         {
             var links = await _links.BuildManyAsync(ownerMethods, p.Total, $"Lightning Split {split.Id.ToString()[..8]}");
-            var isPaid = paidMap.TryGetValue(p.ParticipantId, out var paid) && paid;
-            people.Add(new ShareParticipantDto(p.ParticipantId, p.DisplayName, p.Total, links, isPaid));
+            var isPaid = p.PaymentStatus == PaymentStatus.Paid;
+            people.Add(new ShareParticipantDto(
+                p.ParticipantId,
+                p.DisplayName,
+                p.Total,
+                links,
+                isPaid,
+                p.PaymentStatus,
+                p.PaymentUpdatedAt,
+                p.PaymentSource,
+                p.PaymentNote));
         }
 
         return new ShareSplitResponseDto(split.Id, code, people);

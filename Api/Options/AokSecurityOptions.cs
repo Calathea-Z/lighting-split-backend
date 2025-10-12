@@ -4,7 +4,6 @@
     {
         /// <summary>
         /// Base64-encoded pepper used as the HMAC key. Must be at least 32 bytes (256 bits).
-        /// Store in Key Vault and load into configuration at startup.
         /// </summary>
         public string PepperBase64 { get; set; } = "";
 
@@ -32,5 +31,10 @@
         /// Default: 30 days (rotate when token has 30 days left).
         /// </summary>
         public int ProactiveRotationThresholdDays { get; set; } = 30;
+
+        /// <summary>
+        /// Service-to-service authentication token for Azure Functions and internal services.
+        /// </summary>
+        public string ServiceToken { get; set; } = "";
     }
 }
