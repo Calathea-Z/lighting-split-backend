@@ -63,7 +63,7 @@ public sealed class SplitsController : ControllerBase
         _db.Add(s);
         await _db.SaveChangesAsync();
         return Ok(new CreateSplitResponseDto(s.Id));
-    }
+    }       
 
     // POST /api/splits/{id}/participants
     [HttpPost("{id:guid}/participants")]

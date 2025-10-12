@@ -12,6 +12,7 @@ public sealed class SplitCalculator : ISplitCalculator
     public SplitCalculator(LightningDbContext db) => _db = db;
 
     private static decimal Round4(decimal d) => Math.Round(d, 4, MidpointRounding.AwayFromZero);
+    private static decimal Round2(decimal d) => Math.Round(d, 2, MidpointRounding.AwayFromZero);
 
     public async Task<SplitPreviewDto> PreviewAsync(Guid splitId)
     {
@@ -25,10 +26,13 @@ public sealed class SplitCalculator : ISplitCalculator
             .Include(r => r.Items)
             .FirstAsync(r => r.Id == split.ReceiptId);
 
+        // Note: Line totals should now be calculated correctly during item creation/parsing
+
         var parts = split.Participants.ToDictionary(p => p.Id);
         var totals = parts.Values.ToDictionary(
             p => p.Id,
             p => new MutableTotal { ParticipantId = p.Id, DisplayName = p.DisplayName });
+
 
         // Map claims per item
         var claimsByItem = split.Claims.GroupBy(c => c.ReceiptItemId)
@@ -39,6 +43,8 @@ public sealed class SplitCalculator : ISplitCalculator
         {
             claimsByItem.TryGetValue(item.Id, out var claimsForItem);
             decimal totalClaimed = claimsForItem?.Sum(c => c.QtyShare) ?? 0m;
+
+
             if (totalClaimed <= 0m) continue;
 
             var itemSubtotal = item.LineSubtotal; // pre-tax/tip

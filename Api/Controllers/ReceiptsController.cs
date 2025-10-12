@@ -2,6 +2,7 @@ using Api.Abstractions.Transport;
 using Api.Dtos.Receipts.Requests;
 using Api.Dtos.Receipts.Responses;
 using Api.Dtos.Receipts.Responses.Items;
+using Api.Infrastructure.Middleware;
 using Api.Services.Receipts.Abstractions;
 using Microsoft.AspNetCore.Mvc;
 
@@ -65,7 +66,8 @@ public sealed class ReceiptsController(IReceiptService receiptService) : Control
     {
         try
         {
-            var dto = await receiptService.UploadAsync(form, idemKey, ct);
+            var owner = HttpContext.GetOwner();
+            var dto = await receiptService.UploadAsync(form, idemKey, owner.Id.ToString(), ct);
 
             return CreatedAtAction(
                 nameof(GetById),

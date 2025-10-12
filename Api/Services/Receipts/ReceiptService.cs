@@ -211,6 +211,7 @@ public sealed class ReceiptService(
     public async Task<ReceiptSummaryDto> UploadAsync(
         UploadReceiptItemDto dto,
         string? idempotencyKey,
+        string? ownerUserId,
         CancellationToken ct = default)
     {
         var file = dto.File;
@@ -237,7 +238,7 @@ public sealed class ReceiptService(
             Id = Guid.NewGuid(),
             CreatedAt = now,
             UpdatedAt = now,
-            OwnerUserId = null, // TODO: set when auth lands
+            OwnerUserId = ownerUserId,
             Status = ReceiptStatus.PendingParse,
             Items = [],
             IdempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey
@@ -447,6 +448,11 @@ public sealed class ReceiptService(
             Notes = i.Notes
         }).ToList();
 
+        foreach (var item in entities)
+        {
+            ReceiptItemMaps.Recalculate(item);
+        }
+
         if (entities.Count > 0)
             await db.ReceiptItems.AddRangeAsync(entities, ct);
 
@@ -454,7 +460,7 @@ public sealed class ReceiptService(
         var computed = Round2(entities.Sum(e => e.Qty * e.UnitPrice));
         receipt.ComputedItemsSubtotal = entities.Count == 0 ? null : computed;
         receipt.BaselineSubtotal = receipt.SubTotal; // keep a snapshot of printed subtotal
-        // Optionally store delta for transparency (do not set Reason here—status flow controls that)
+        // Optionally store delta for transparency (do not set Reason hereï¿½status flow controls that)
         receipt.Discrepancy = (receipt.SubTotal is decimal s) ? Round2(s - computed) : null;
 
         receipt.UpdatedAt = clock.UtcNow;
@@ -469,7 +475,7 @@ public sealed class ReceiptService(
     }
 
     #region Helpers
-    
+
     private static bool IsUniqueViolation(DbUpdateException ex)
     {
         // Npgsql: SQLSTATE 23505 = unique_violation
@@ -498,6 +504,6 @@ public sealed class ReceiptService(
                         i.Label == AutoAdjNote)
             .ExecuteDeleteAsync(ct);
     }
-    
+
     #endregion
 }
